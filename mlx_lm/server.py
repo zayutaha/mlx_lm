@@ -46,6 +46,42 @@ from .sample_utils import make_logits_processors, make_sampler
 from .utils import _parse_size, load, sharded_load
 
 
+def _maybe_dequantize_cache(cache):
+    """Convert MixedQuantKVCache entries back to KVCache for batch merge."""
+    from .models.mixed_quant_cache import MixedQuantKVCache
+    for i, c in enumerate(cache):
+        if isinstance(c, MixedQuantKVCache):
+            cache[i] = c.to_kvcache()
+    return cache
+
+
+def _maybe_quantize_cache(cache, kv_quant_config, min_tokens=0):
+    """Convert a list of KVCache to MixedQuantKVCache for LRU storage.
+
+    Args:
+        cache: list of cache objects (KVCache, QuantizedKVCache, etc.)
+        kv_quant_config: (k_bits, v_bits) tuple, or None to skip.
+        min_tokens: only quantize caches with at least this many tokens.
+
+    Returns:
+        The cache list, with eligible KVCache entries converted in-place.
+    """
+    if kv_quant_config is None:
+        return cache
+    k_bits, v_bits = kv_quant_config
+    from .models.cache import KVCache
+    from .models.mixed_quant_cache import MixedQuantKVCache
+    for i, c in enumerate(cache):
+        # Skip entries that are already quantized (re-stored after batch extract)
+        if isinstance(c, MixedQuantKVCache):
+            continue
+        if isinstance(c, KVCache) and c.offset >= max(min_tokens, 1):
+            cache[i] = MixedQuantKVCache.from_kvcache(
+                c, k_bits=k_bits, v_bits=v_bits
+            )
+    return cache
+
+
 def get_system_fingerprint():
     gpu_arch = mx.device_info()["architecture"]
     return f"{__version__}-{mx.__version__}-{platform.platform()}-{gpu_arch}"
@@ -443,6 +479,12 @@ class ResponseGenerator:
         self.prompt_cache = prompt_cache
         self.requests = Queue()
         self._state_machine_cache = {}
+        self._kv_quant_config = getattr(
+            model_provider.cli_args, "kv_quant_config", None
+        )
+        self._kv_quant_start = getattr(
+            model_provider.cli_args, "quantized_kv_start", 0
+        )
 
         self._time_budget = TimeBudget()
         self._is_distributed = mx.distributed.init().size() > 1
@@ -450,6 +492,13 @@ class ResponseGenerator:
         self._stop = False
         self._generation_thread = Thread(target=self._generate)
         self._generation_thread.start()
+
+    def _store_cache(self, model_key, cache_key, cache, **kwargs):
+        """Optionally quantize KV cache before inserting into LRU."""
+        cache = _maybe_quantize_cache(
+            cache, self._kv_quant_config, min_tokens=self._kv_quant_start
+        )
+        self.prompt_cache.insert_cache(model_key, cache_key, cache, **kwargs)
 
     def stop_and_join(self):
         self._stop = True
@@ -710,6 +759,25 @@ class ResponseGenerator:
             else:
                 return self._next_request(timeout)
 
+=======
+        def progress_callback(info):
+            for uid, processed, total in info:
+                if uid in batch_results:
+                    batch_results[uid]["rqueue"].put((min(processed, total), total))
+
+        def checkpoint_callback(prompts):
+            for uid, prompt_end, cache in prompts:
+                rs = batch_results[uid]
+                if not rs["checkpoint"]:
+                    continue
+                self._store_cache(
+                    current_model_key,
+                    rs["cache_key"][:-prompt_end],
+                    list(cache),
+                    cache_type="user",
+                )
+
+>>>>>>> 448063d (Add KV cache quantization and disk persistence to mlx_lm.server)
         if self._is_distributed:
             seed = mx.distributed.all_sum(mx.random.state[0]).view(mx.uint64).item()
             mx.random.seed(seed)
@@ -753,6 +821,7 @@ class ResponseGenerator:
                     cache, rest = self.prompt_cache.fetch_nearest_cache(
                         current_model_key, prompt
                     )
+<<<<<<< HEAD
                     prompt_cache_count = len(prompt) - len(rest)
                     N = prompt_cache_count
                     while N > 0:
@@ -762,6 +831,12 @@ class ResponseGenerator:
                         else:
                             segments[0] = segments[0][N:]
                             break
+                    ctx.prompt_cache_count = len(prompt) - len(rest)
+                    if cache is None:
+                        cache = make_prompt_cache(self.model_provider.model)
+                    elif self._kv_quant_config is not None:
+                        # Dequantize for batch merge compatibility
+                        cache = _maybe_dequantize_cache(cache)
 
                     ctx = GenerationContext(
                         has_tool_calling=tokenizer.has_tool_calling,
@@ -912,6 +987,8 @@ class ResponseGenerator:
                                 r.all_tokens[:],
                                 r.prompt_cache,
                                 cache_type="assistant",
+                            self._store_cache(
+                                current_model_key, result["cache_key"], r.prompt_cache
                             )
                             del batch_results[r.uid]
 
@@ -925,6 +1002,18 @@ class ResponseGenerator:
                         # It may have already been removed during
                         # generation
                         batch_results.pop(uid, None)
+                    with mx.stream(generation_stream):
+                        caches = batch_generator.remove(
+                            uids_to_remove, return_prompt_caches=True
+                        )
+                        for uid, prompt_cache in caches.items():
+                            if uid not in batch_results:
+                                continue
+                            result = batch_results[uid]
+                            self._store_cache(
+                                current_model_key, result["cache_key"], prompt_cache
+                            )
+                            del batch_results[uid]
 
     def _serve_single(self, request):
         rqueue, request, args = request
@@ -978,6 +1067,10 @@ class ResponseGenerator:
                 cache = make_prompt_cache(self.model_provider.model)
                 if self.model_provider.draft_model is not None:
                     cache += make_prompt_cache(self.model_provider.draft_model)
+            elif self._kv_quant_config is not None:
+                # Dequantize for stream_generate compatibility (single-serve
+                # path doesn't support quantized cache in generate_step)
+                cache = _maybe_dequantize_cache(cache)
 
             # Process the prompt and generate tokens
             for gen in stream_generate(
@@ -1024,7 +1117,7 @@ class ResponseGenerator:
             rqueue.put(None)
 
             # Save the KV cache again
-            self.prompt_cache.insert_cache(
+            self._store_cache(
                 self.model_provider.model_key, cache_key, cache
             )
 
@@ -1748,7 +1841,15 @@ def run(
     handler_class=APIHandler,
 ):
     group = mx.distributed.init()
-    prompt_cache = LRUPromptCache(model_provider.cli_args.prompt_cache_size)
+    cache_dir = getattr(model_provider.cli_args, "prompt_cache_dir", None)
+    if cache_dir:
+        from .disk_cache import DiskBackedPromptCache
+        prompt_cache = DiskBackedPromptCache(
+            max_size=model_provider.cli_args.prompt_cache_size,
+            cache_dir=cache_dir,
+        )
+    else:
+        prompt_cache = LRUPromptCache(model_provider.cli_args.prompt_cache_size)
     response_generator = ResponseGenerator(model_provider, prompt_cache)
     if group.rank() == 0:
         _run_http_server(host, port, response_generator)
@@ -1888,6 +1989,31 @@ def main():
         help="Maximum size in bytes of the KV caches",
     )
     parser.add_argument(
+        "--kv-cache-quantization",
+        type=str,
+        default=None,
+        metavar="K_BITS,V_BITS",
+        help="Quantize cached KV for memory savings, e.g. '8,4' for K@8-bit V@4-bit. "
+        "Converts caches before storing in the prompt cache LRU. "
+        "Saves ~20%% memory at 32K context with K8,V4.",
+    )
+    parser.add_argument(
+        "--quantized-kv-start",
+        type=int,
+        default=0,
+        help="Minimum number of tokens before quantizing a KV cache "
+        "(default: 0, quantize all). Short caches below this threshold "
+        "stay in fp16.",
+    )
+    parser.add_argument(
+        "--prompt-cache-dir",
+        type=str,
+        default=None,
+        help="Directory to persist prompt caches to disk. Survives server "
+        "restarts — cached prompts are restored from disk on cache miss. "
+        "Evicted caches are also saved here.",
+    )
+    parser.add_argument(
         "--pipeline",
         action="store_true",
         help="Use pipelining instead of tensor parallelism",
@@ -1899,6 +2025,16 @@ def main():
         "(requires a model with an MTP head, e.g. Qwen3.5).",
     )
     args = parser.parse_args()
+
+    # Parse --kv-cache-quantization into a (k_bits, v_bits) tuple
+    if args.kv_cache_quantization is not None:
+        parts = args.kv_cache_quantization.split(",")
+        if len(parts) != 2:
+            parser.error("--kv-cache-quantization must be K_BITS,V_BITS (e.g. '8,4')")
+        args.kv_quant_config = (int(parts[0]), int(parts[1]))
+    else:
+        args.kv_quant_config = None
+
     if mx.metal.is_available():
         wired_limit = mx.device_info()["max_recommended_working_set_size"]
         mx.set_wired_limit(wired_limit)
