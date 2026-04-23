@@ -447,6 +447,7 @@ class ModelProvider:
         if self.model_key != model_key:
             self._load(*model_key)
         if self.draft_model is None and not getattr(cli_args, "no_batch", False):
+        if self.draft_model is None and not getattr(self.cli_args, "no_batch", False):
             self.is_batchable = all(
                 hasattr(c, "merge") for c in make_prompt_cache(self.model)
             )
