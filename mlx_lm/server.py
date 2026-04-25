@@ -765,6 +765,12 @@ class ResponseGenerator:
 
         # Load the default model if it is given
         self.model_provider.load_default()
+        # Recreate the generation stream in this thread.
+        # MLX streams are thread-local; the module-level stream was
+        # created in the main thread and is not available here.
+        import mlx_lm.generate as _gen_mod
+
+        _gen_mod.generation_stream = mx.new_stream(mx.default_device())
 
         current_model = None
         current_sampling = None
