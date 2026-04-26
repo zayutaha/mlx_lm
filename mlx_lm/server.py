@@ -513,8 +513,9 @@ class ResponseGenerator:
         self._is_distributed = mx.distributed.init().size() > 1
         self._rank = mx.distributed.init().rank()
         self._stop = False
-        self._generation_thread = Thread(target=self._generate)
-        self._generation_thread.start()
+        # Generation runs on the main thread (see run()).
+        # MLX streams are thread-affine; async_eval requires the
+        # stream that was active when the model was loaded.
 
     def _store_cache(self, model_key, cache_key, cache, **kwargs):
         """Optionally quantize KV cache before inserting into LRU."""
@@ -525,10 +526,9 @@ class ResponseGenerator:
 
     def stop_and_join(self):
         self._stop = True
-        self._generation_thread.join()
 
     def join(self):
-        self._generation_thread.join()
+        pass
 
     def _log_cache_stats(self):
         n_sequences = len(self.prompt_cache)
@@ -781,6 +781,7 @@ class ResponseGenerator:
         generation_stream = new_stream           # server.py's reference
         _gen_mod.generation_stream = new_stream  # generate.py's reference
 
+>>>>>>> 02c85d5 (Run generation on main thread, HTTP server in background)
         current_model = None
         current_sampling = None
         current_tokenizer = None
@@ -824,7 +825,6 @@ class ResponseGenerator:
                     cache_type="user",
                 )
 
->>>>>>> 448063d (Add KV cache quantization and disk persistence to mlx_lm.server)
         if self._is_distributed:
             seed = mx.distributed.all_sum(mx.random.state[0]).view(mx.uint64).item()
             mx.random.seed(seed)
@@ -1899,9 +1899,19 @@ def run(
         prompt_cache = LRUPromptCache(model_provider.cli_args.prompt_cache_size)
     response_generator = ResponseGenerator(model_provider, prompt_cache)
     if group.rank() == 0:
-        _run_http_server(host, port, response_generator)
+        # Start HTTP server in a background thread.
+        # Generation MUST run on the main thread because MLX streams
+        # are thread-affine: async_eval requires the stream that was
+        # active when the model was loaded (stream 0, main thread).
+        http_thread = Thread(
+            target=_run_http_server,
+            args=(host, port, response_generator),
+            daemon=True,
+        )
+        http_thread.start()
+        response_generator._generate()
     else:
-        response_generator.join()
+        response_generator._generate()
 
 
 def main():
