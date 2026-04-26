@@ -1909,9 +1909,17 @@ def run(
             daemon=True,
         )
         http_thread.start()
-        response_generator._generate()
+        try:
+            response_generator._generate()
+        except KeyboardInterrupt:
+            logging.info("Shutting down...")
+        finally:
+            response_generator._stop = True
     else:
-        response_generator._generate()
+        try:
+            response_generator._generate()
+        except KeyboardInterrupt:
+            pass
 
 
 def main():
