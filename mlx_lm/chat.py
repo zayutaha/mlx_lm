@@ -1,6 +1,7 @@
 # Copyright © 2023-2024 Apple Inc.
 
 import argparse
+import json
 
 import mlx.core as mx
 
@@ -84,6 +85,31 @@ def setup_arg_parser():
         action="store_true",
         help="Use pipelining instead of tensor parallelism",
     )
+    parser.add_argument(
+        "--turbo-kv-bits",
+        type=int,
+        default=None,
+        help="TurboQuant KV cache compression bits (1-4). "
+        "3-bit gives 4.6x compression. Default: no compression.",
+    )
+    parser.add_argument(
+        "--turbo-fp16-layers",
+        type=int,
+        default=1,
+        help="Number of first/last layers to keep in FP16 "
+        "when using --turbo-kv-bits. Default: 1.",
+    )
+    parser.add_argument(
+        "--mtp",
+        action="store_true",
+        help="Use native Multi-Token Prediction for speculative decoding",
+    )
+    parser.add_argument(
+        "--chat-template-args",
+        type=str,
+        default=None,
+        help="JSON string of arguments for tokenizer's apply_chat_template, e.g. '{\"enable_thinking\":false}'",
+    )
     return parser
 
 
@@ -123,13 +149,23 @@ def main():
 
     rprint(f"[INFO] Starting chat session with {args.model}.")
     print_help()
-    prompt_cache = make_prompt_cache(model, args.max_kv_size)
+    prompt_cache = make_prompt_cache(
+        model,
+        args.max_kv_size,
+        turbo_kv_bits=args.turbo_kv_bits,
+        turbo_fp16_layers=args.turbo_fp16_layers,
+    )
     while True:
         query = input(">> " if rank == 0 else "")
         if query == "q":
             break
         if query == "r":
-            prompt_cache = make_prompt_cache(model, args.max_kv_size)
+            prompt_cache = make_prompt_cache(
+                model,
+                args.max_kv_size,
+                turbo_kv_bits=args.turbo_kv_bits,
+                turbo_fp16_layers=args.turbo_fp16_layers,
+            )
             continue
         if query == "h":
             print_help()
@@ -138,9 +174,13 @@ def main():
         if args.system_prompt is not None:
             messages.append({"role": "system", "content": args.system_prompt})
         messages.append({"role": "user", "content": query})
+        chat_template_kwargs = {}
+        if args.chat_template_args:
+            chat_template_kwargs = json.loads(args.chat_template_args)
         prompt = tokenizer.apply_chat_template(
             messages,
             add_generation_prompt=True,
+            **chat_template_kwargs,
         )
         for response in stream_generate(
             model,
@@ -157,6 +197,9 @@ def main():
                 ),
             ),
             prompt_cache=prompt_cache,
+            turbo_kv_bits=args.turbo_kv_bits,
+            turbo_fp16_layers=args.turbo_fp16_layers,
+            mtp=args.mtp,
         ):
             rprint(response.text, flush=True, end="")
         rprint()

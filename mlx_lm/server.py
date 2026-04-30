@@ -423,8 +423,24 @@ class ModelProvider:
 
         # Compute batchability
         is_batchable = draft_model is None
+        try:
+            cache_for_check = make_prompt_cache(
+                model,
+                turbo_kv_bits=self.cli_args.turbo_kv_bits,
+                turbo_fp16_layers=self.cli_args.turbo_fp16_layers,
+            )
+        except ValueError as e:
+            if "TurboQuant" in str(e):
+                logging.warning(
+                    f"TurboQuant not compatible with this model: {e}. "
+                    "Falling back to standard KV cache."
+                )
+                self.cli_args.turbo_kv_bits = None
+                cache_for_check = make_prompt_cache(model)
+            else:
+                raise
         is_batchable = is_batchable and all(
-            hasattr(c, "merge") for c in make_prompt_cache(model)
+            hasattr(c, "merge") for c in cache_for_check
         )
 
         # Update the member variables
@@ -449,7 +465,12 @@ class ModelProvider:
         if self.draft_model is None and not getattr(cli_args, "no_batch", False):
         if self.draft_model is None and not getattr(self.cli_args, "no_batch", False):
             self.is_batchable = all(
-                hasattr(c, "merge") for c in make_prompt_cache(self.model)
+                hasattr(c, "merge")
+                for c in make_prompt_cache(
+                    self.model,
+                    turbo_kv_bits=self.cli_args.turbo_kv_bits,
+                    turbo_fp16_layers=self.cli_args.turbo_fp16_layers,
+                )
             )
 
         return self.model, self.tokenizer
@@ -513,6 +534,7 @@ class ResponseGenerator:
         self._is_distributed = mx.distributed.init().size() > 1
         self._rank = mx.distributed.init().rank()
         self._stop = False
+        self._state_machine_cache = {}
         # Generation runs on the main thread (see run()).
         # MLX streams are thread-affine; async_eval requires the
         # stream that was active when the model was loaded.
@@ -880,7 +902,21 @@ class ResponseGenerator:
                             break
                     ctx.prompt_cache_count = len(prompt) - len(rest)
                     if cache is None or not cache:
-                        cache = make_prompt_cache(self.model_provider.model)
+                        try:
+                            cache = make_prompt_cache(
+                                self.model_provider.model,
+                                turbo_kv_bits=self.cli_args.turbo_kv_bits,
+                                turbo_fp16_layers=self.cli_args.turbo_fp16_layers,
+                            )
+                        except ValueError as e:
+                            if "TurboQuant" in str(e):
+                                logging.warning(
+                                    f"TurboQuant not compatible: {e}. Using standard cache."
+                                )
+                                self.cli_args.turbo_kv_bits = None
+                                cache = make_prompt_cache(self.model_provider.model)
+                            else:
+                                raise
                     elif self._kv_quant_config is not None:
                         # Dequantize for batch merge compatibility
                         cache = _maybe_dequantize_cache(cache)
@@ -1138,9 +1174,29 @@ class ResponseGenerator:
             ctx.prompt_cache_count = len(prompt) - len(rest)
             cache_key = prompt[:]
             if cache is None:
-                cache = make_prompt_cache(self.model_provider.model)
-                if self.model_provider.draft_model is not None:
-                    cache += make_prompt_cache(self.model_provider.draft_model)
+                try:
+                    cache = make_prompt_cache(
+                        self.model_provider.model,
+                        turbo_kv_bits=self.cli_args.turbo_kv_bits,
+                        turbo_fp16_layers=self.cli_args.turbo_fp16_layers,
+                    )
+                    if self.model_provider.draft_model is not None:
+                        cache += make_prompt_cache(
+                            self.model_provider.draft_model,
+                            turbo_kv_bits=self.cli_args.turbo_kv_bits,
+                            turbo_fp16_layers=self.cli_args.turbo_fp16_layers,
+                        )
+                except ValueError as e:
+                    if "TurboQuant" in str(e):
+                        logging.warning(
+                            f"TurboQuant not compatible: {e}. Using standard cache."
+                        )
+                        self.cli_args.turbo_kv_bits = None
+                        cache = make_prompt_cache(self.model_provider.model)
+                        if self.model_provider.draft_model is not None:
+                            cache += make_prompt_cache(self.model_provider.draft_model)
+                    else:
+                        raise
             elif self._kv_quant_config is not None:
                 # Dequantize for stream_generate compatibility (single-serve
                 # path doesn't support quantized cache in generate_step)
@@ -2106,6 +2162,20 @@ def main():
         help="Minimum number of tokens before quantizing a KV cache "
         "(default: 0, quantize all). Short caches below this threshold "
         "stay in fp16.",
+    )
+    parser.add_argument(
+        "--turbo-kv-bits",
+        type=int,
+        default=None,
+        help="TurboQuant KV cache compression bits (1-4). "
+        "3-bit gives 4.6x compression. Default: no compression.",
+    )
+    parser.add_argument(
+        "--turbo-fp16-layers",
+        type=int,
+        default=1,
+        help="Number of first/last layers to keep in FP16 "
+        "when using --turbo-kv-bits. Default: 1.",
     )
     parser.add_argument(
         "--prompt-cache-dir",

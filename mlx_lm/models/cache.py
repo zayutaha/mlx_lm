@@ -38,14 +38,12 @@ def make_prompt_cache(
     if hasattr(model, "make_cache"):
         default_cache = model.make_cache()
         if turbo_kv_bits is not None:
-            # Check compatibility
-            if not isinstance(default_cache[0], KVCache):
-                raise ValueError(
-                    f"[TurboQuant] Incompatible cache type: "
-                    f"{type(default_cache[0]).__name__}. "
-                    f"TurboQuant only works with standard multi-head "
-                    f"attention (KVCache)."
-                )
+            from .turboquant_cache import TurboQuantKVCache
+            # Apply TurboQuant only to KVCache layers, keep others as-is
+            for i, c in enumerate(default_cache):
+                if isinstance(c, KVCache):
+                    default_cache[i] = TurboQuantKVCache(bits=turbo_kv_bits)
+            return default_cache
         else:
             return default_cache
 

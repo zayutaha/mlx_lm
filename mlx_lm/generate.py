@@ -699,6 +699,8 @@ def mtp_generate_step(
     kv_bits: Optional[int] = None,
     kv_group_size: int = 64,
     quantized_kv_start: int = 0,
+    turbo_kv_bits: Optional[int] = None,
+    turbo_fp16_layers: int = 1,
 ) -> Generator[Tuple[mx.array, mx.array, bool], None, None]:
     """A generator that uses the model's native MTP head for speculative decoding.
 
@@ -718,14 +720,24 @@ def mtp_generate_step(
     prev_tokens = None
 
     if prompt_cache is None:
-        model_cache = cache.make_prompt_cache(model)
+        model_cache = cache.make_prompt_cache(
+            model,
+            turbo_kv_bits=turbo_kv_bits,
+            turbo_fp16_layers=turbo_fp16_layers,
+        )
         mtp_cache = model.make_mtp_cache()
+        if turbo_kv_bits is not None and mtp_cache:
+            from mlx_lm.models.turboquant_cache import TurboQuantKVCache
+            mtp_cache = [TurboQuantKVCache(bits=turbo_kv_bits) for _ in mtp_cache]
     else:
         # Split a pre-built cache at backbone length.  If MTP entries are
         # absent (e.g. cache created by make_prompt_cache), create them.
         n_main = len(model.layers)
         model_cache = prompt_cache[:n_main]
         mtp_cache = prompt_cache[n_main:] or model.make_mtp_cache()
+        if turbo_kv_bits is not None and mtp_cache:
+            from mlx_lm.models.turboquant_cache import TurboQuantKVCache
+            mtp_cache = [TurboQuantKVCache(bits=turbo_kv_bits) if isinstance(c, cache.KVCache) else c for c in mtp_cache]
 
     # Exact-match acceptance for greedy (sampler=None); probabilistic
     # acceptance min(1, p_target/p_draft) for stochastic samplers.
