@@ -2,10 +2,11 @@
 
 import argparse
 import json
+from typing import Generator, List, Optional, Union
 
 import mlx.core as mx
 
-from .generate import stream_generate
+from .generate import GenerationResponse, stream_generate
 from .models.cache import make_prompt_cache
 from .sample_utils import make_sampler
 from .utils import load, sharded_load
@@ -17,6 +18,193 @@ DEFAULT_XTC_THRESHOLD = 0.0
 DEFAULT_SEED = 0
 DEFAULT_MAX_TOKENS = 256
 DEFAULT_MODEL = "mlx-community/Llama-3.2-3B-Instruct-4bit"
+
+
+def chat(
+    model,
+    tokenizer,
+    messages: List[dict],
+    *,
+    tokens: Optional[Union[List[int], "mx.array"]] = None,
+    max_tokens: int = 256,
+    temp: float = DEFAULT_TEMP,
+    top_p: float = DEFAULT_TOP_P,
+    xtc_probability: float = DEFAULT_XTC_PROBABILITY,
+    xtc_threshold: float = DEFAULT_XTC_THRESHOLD,
+    sampler=None,
+    prompt_cache=None,
+    max_kv_size: Optional[int] = None,
+    turbo_kv_bits: Optional[int] = None,
+    turbo_fp16_layers: int = 1,
+    mtp: bool = False,
+    chat_template_kwargs: Optional[dict] = None,
+) -> str:
+    """Generate a chat response from the model.
+
+    Args:
+        model: The model to use for generation.
+        tokenizer: The tokenizer to use.
+        messages (List[dict]): A list of message dictionaries with 'role' and 'content' keys.
+            Example: [{"role": "user", "content": "Hello!"}]
+        tokens (Optional[Union[List[int], mx.array]]): Pre-tokenized input tokens.
+            If provided, this takes precedence over messages and the chat template
+            is not applied. Use this for continuing from a tokenized prompt.
+        max_tokens (int): Maximum number of tokens to generate. Default: 256.
+        temp (float): Sampling temperature. Default: 0.0.
+        top_p (float): Nucleus sampling top-p. Default: 1.0.
+        xtc_probability (float): XTC sampling probability. Default: 0.0.
+        xtc_threshold (float): XTC threshold. Default: 0.0.
+        sampler: Optional custom sampler. Default: None.
+        prompt_cache: Optional pre-computed prompt cache. Default: None.
+        max_kv_size (int): Maximum KV cache size. Default: None.
+        turbo_kv_bits (int): TurboQuant KV cache bits. Default: None.
+        turbo_fp16_layers (int): Number of FP16 layers for TurboQuant. Default: 1.
+        mtp (bool): Use multi-token prediction. Default: False.
+        chat_template_kwargs (dict): Additional kwargs for apply_chat_template. Default: None.
+
+    Returns:
+        str: The generated response text.
+    """
+    import mx
+
+    if tokens is not None:
+        if isinstance(tokens, list):
+            prompt = mx.array(tokens, mx.uint32)
+        else:
+            prompt = tokens
+    else:
+        chat_template_kwargs = chat_template_kwargs or {}
+        prompt = tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            **chat_template_kwargs,
+        )
+
+    if sampler is None:
+        sampler = make_sampler(
+            temp,
+            top_p,
+            xtc_threshold=xtc_threshold,
+            xtc_probability=xtc_probability,
+            xtc_special_tokens=(
+                tokenizer.encode("\n") + list(tokenizer.eos_token_ids)
+            ),
+        )
+
+    if prompt_cache is None:
+        prompt_cache = make_prompt_cache(
+            model,
+            max_kv_size,
+            turbo_kv_bits=turbo_kv_bits,
+            turbo_fp16_layers=turbo_fp16_layers,
+        )
+
+    text = ""
+    for response in stream_generate(
+        model,
+        tokenizer,
+        prompt,
+        max_tokens=max_tokens,
+        sampler=sampler,
+        prompt_cache=prompt_cache,
+        turbo_kv_bits=turbo_kv_bits,
+        turbo_fp16_layers=turbo_fp16_layers,
+        mtp=mtp,
+    ):
+        text += response.text
+
+    return text
+
+
+def stream_chat(
+    model,
+    tokenizer,
+    messages: List[dict],
+    *,
+    tokens: Optional[Union[List[int], "mx.array"]] = None,
+    max_tokens: int = 256,
+    temp: float = DEFAULT_TEMP,
+    top_p: float = DEFAULT_TOP_P,
+    xtc_probability: float = DEFAULT_XTC_PROBABILITY,
+    xtc_threshold: float = DEFAULT_XTC_THRESHOLD,
+    sampler=None,
+    prompt_cache=None,
+    max_kv_size: Optional[int] = None,
+    turbo_kv_bits: Optional[int] = None,
+    turbo_fp16_layers: int = 1,
+    mtp: bool = False,
+    chat_template_kwargs: Optional[dict] = None,
+) -> Generator[GenerationResponse, None, None]:
+    """Stream chat responses from the model.
+
+    Args:
+        model: The model to use for generation.
+        tokenizer: The tokenizer to use.
+        messages (List[dict]): A list of message dictionaries with 'role' and 'content' keys.
+        tokens (Optional[Union[List[int], mx.array]]): Pre-tokenized input tokens.
+            If provided, this takes precedence over messages.
+        max_tokens (int): Maximum number of tokens to generate. Default: 256.
+        temp (float): Sampling temperature. Default: 0.0.
+        top_p (float): Nucleus sampling top-p. Default: 1.0.
+        xtc_probability (float): XTC sampling probability. Default: 0.0.
+        xtc_threshold (float): XTC threshold. Default: 0.0.
+        sampler: Optional custom sampler. Default: None.
+        prompt_cache: Optional pre-computed prompt cache. Default: None.
+        max_kv_size (int): Maximum KV cache size. Default: None.
+        turbo_kv_bits (int): TurboQuant KV cache bits. Default: None.
+        turbo_fp16_layers (int): Number of FP16 layers for TurboQuant. Default: 1.
+        mtp (bool): Use multi-token prediction. Default: False.
+        chat_template_kwargs (dict): Additional kwargs for apply_chat_template. Default: None.
+
+    Yields:
+        GenerationResponse: The generated response with metadata.
+    """
+    import mx
+
+    if tokens is not None:
+        if isinstance(tokens, list):
+            prompt = mx.array(tokens, mx.uint32)
+        else:
+            prompt = tokens
+    else:
+        chat_template_kwargs = chat_template_kwargs or {}
+        prompt = tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            **chat_template_kwargs,
+        )
+
+    if sampler is None:
+        sampler = make_sampler(
+            temp,
+            top_p,
+            xtc_threshold=xtc_threshold,
+            xtc_probability=xtc_probability,
+            xtc_special_tokens=(
+                tokenizer.encode("\n") + list(tokenizer.eos_token_ids)
+            ),
+        )
+
+    if prompt_cache is None:
+        prompt_cache = make_prompt_cache(
+            model,
+            max_kv_size,
+            turbo_kv_bits=turbo_kv_bits,
+            turbo_fp16_layers=turbo_fp16_layers,
+        )
+
+    for response in stream_generate(
+        model,
+        tokenizer,
+        prompt,
+        max_tokens=max_tokens,
+        sampler=sampler,
+        prompt_cache=prompt_cache,
+        turbo_kv_bits=turbo_kv_bits,
+        turbo_fp16_layers=turbo_fp16_layers,
+        mtp=mtp,
+    ):
+        yield response
 
 
 def setup_arg_parser():
@@ -110,6 +298,13 @@ def setup_arg_parser():
         default=None,
         help="JSON string of arguments for tokenizer's apply_chat_template, e.g. '{\"enable_thinking\":false}'",
     )
+    parser.add_argument(
+        "--tokens",
+        "-t",
+        type=str,
+        default=None,
+        help="Pre-tokenized input tokens (comma-separated integers). If provided, takes precedence over --prompt/--message and chat template is not applied.",
+    )
     return parser
 
 
@@ -149,39 +344,51 @@ def main():
 
     rprint(f"[INFO] Starting chat session with {args.model}.")
     print_help()
+
+    chat_template_kwargs = {}
+    if args.chat_template_args:
+        chat_template_kwargs = json.loads(args.chat_template_args)
+
+    if args.tokens is not None:
+        prompt = mx.array([int(t) for t in args.tokens.split(",")], mx.uint32)
+        rprint(f"[INFO] Using provided tokens: {prompt.tolist()[:10]}...")
+    else:
+        prompt = None
+
     prompt_cache = make_prompt_cache(
         model,
         args.max_kv_size,
         turbo_kv_bits=args.turbo_kv_bits,
         turbo_fp16_layers=args.turbo_fp16_layers,
     )
+
     while True:
-        query = input(">> " if rank == 0 else "")
-        if query == "q":
-            break
-        if query == "r":
-            prompt_cache = make_prompt_cache(
-                model,
-                args.max_kv_size,
-                turbo_kv_bits=args.turbo_kv_bits,
-                turbo_fp16_layers=args.turbo_fp16_layers,
+        if prompt is None:
+            query = input(">> " if rank == 0 else "")
+            if query == "q":
+                break
+            if query == "r":
+                prompt_cache = make_prompt_cache(
+                    model,
+                    args.max_kv_size,
+                    turbo_kv_bits=args.turbo_kv_bits,
+                    turbo_fp16_layers=args.turbo_fp16_layers,
+                )
+                continue
+            if query == "h":
+                print_help()
+                continue
+            messages = []
+            if args.system_prompt is not None:
+                messages.append({"role": "system", "content": args.system_prompt})
+            messages.append({"role": "user", "content": query})
+            prompt = tokenizer.apply_chat_template(
+                messages,
+                add_generation_prompt=True,
+                **chat_template_kwargs,
             )
-            continue
-        if query == "h":
-            print_help()
-            continue
-        messages = []
-        if args.system_prompt is not None:
-            messages.append({"role": "system", "content": args.system_prompt})
-        messages.append({"role": "user", "content": query})
-        chat_template_kwargs = {}
-        if args.chat_template_args:
-            chat_template_kwargs = json.loads(args.chat_template_args)
-        prompt = tokenizer.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-            **chat_template_kwargs,
-        )
+
+        last_response = None
         for response in stream_generate(
             model,
             tokenizer,
@@ -202,7 +409,16 @@ def main():
             mtp=args.mtp,
         ):
             rprint(response.text, flush=True, end="")
+            last_response = response
         rprint()
+        if last_response:
+            rprint(
+                f"[INFO] Generated {last_response.generation_tokens} tokens "
+                f"at {last_response.generation_tps:.2f} tokens/sec "
+                f"(peak memory: {last_response.peak_memory:.2f} GB)"
+            )
+
+        prompt = None
 
 
 if __name__ == "__main__":
