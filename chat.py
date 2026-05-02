@@ -8,7 +8,7 @@ from pylatexenc.latex2text import LatexNodes2Text
 from sympy import sympify, pretty
 
 BASE_CMD = [
-    "uv", "run", "mlx_lm.chat",
+    "uv", "run", "python", "-m", "mlx_lm.chat",
     "--model", "/Users/zayaantaha/.omlx/models/Qwwwen",
     "--mtp",
     "--turbo-kv-bits", "3",
@@ -61,6 +61,10 @@ class ChatInput(TextArea):
             event.prevent_default()
             event.stop()
             await self.app.action_submit()
+        elif event.key == "ctrl+d" or event.key == "ctrl_d":
+            event.prevent_default()
+            event.stop()
+            await self.app.action_interrupt()
         else:
             await super()._on_key(event)
 
@@ -80,27 +84,20 @@ class ChatUI(App):
         yield Footer()
 
     async def on_mount(self):
+        import os
+        env = os.environ.copy()
+        env["PYTHONPATH"] = os.getcwd()
         self.proc = await asyncio.create_subprocess_exec(
             *BASE_CMD,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
+            env=env,
         )
         self.busy = False
+        self.interrupted = False
         # drain startup banner until first ">> "
         await self._read_until_prompt()
-
-    async def _read_until_prompt(self) -> str:
-        """Read stdout until mlx_lm.chat shows '>> '."""
-        buf = ""
-        while True:
-            ch = await self.proc.stdout.read(1)
-            if not ch:
-                break
-            buf += ch.decode(errors="ignore")
-            if buf.endswith(">> "):
-                break
-        return buf
 
     async def action_submit(self):
         if self.busy:
@@ -111,6 +108,13 @@ class ChatUI(App):
         if not user_text:
             return
 
+        if user_text == "/clear":
+            self.query_one("#chat", VerticalScroll).query(Markdown).remove()
+            self.proc.stdin.write((user_text + "\n").encode())
+            await self.proc.stdin.drain()
+            await self._read_until_prompt()
+            return
+
         chat = self.query_one("#chat", VerticalScroll)
         await chat.mount(Markdown(f"**You:** {user_text}", classes="bubble"))
         self.current_md = Markdown("**Assistant:** ▌", classes="bubble")
@@ -118,6 +122,12 @@ class ChatUI(App):
         chat.scroll_end()
 
         asyncio.create_task(self.run_model(user_text))
+
+    async def action_interrupt(self):
+        if self.busy:
+            self.proc.stdin.write(b"\x04")
+            await self.proc.stdin.drain()
+            self.interrupted = True
 
     async def _read_until_prompt(self) -> str:
         buf = ""
@@ -156,6 +166,9 @@ class ChatUI(App):
 
         # final render — clean, no cursor
         display = strip_prompt_markers(transform_math(buf))
+        if self.interrupted:
+            display += "\n\n*Generation interrupted by user.*"
+            self.interrupted = False
         await self.current_md.update(f"**Assistant:**\n\n{display}")
         self.query_one("#chat", VerticalScroll).scroll_end()
         self.busy = False

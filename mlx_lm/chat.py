@@ -2,6 +2,9 @@
 
 import argparse
 import json
+import os
+import select
+import sys
 from typing import Generator, List, Optional, Union
 
 import mlx.core as mx
@@ -340,6 +343,7 @@ def main():
         rprint("The command list:")
         rprint("- 'q' to exit")
         rprint("- 'r' to reset the chat")
+        rprint("- '/clear' to clear the conversation")
         rprint("- 'h' to display these commands")
 
     rprint(f"[INFO] Starting chat session with {args.model}.")
@@ -364,7 +368,11 @@ def main():
 
     while True:
         if prompt is None:
-            query = input(">> " if rank == 0 else "")
+            try:
+                query = input(">> " if rank == 0 else "")
+            except EOFError:
+                rprint("\n[INFO] Exiting...")
+                break
             if query == "q":
                 break
             if query == "r":
@@ -374,6 +382,15 @@ def main():
                     turbo_kv_bits=args.turbo_kv_bits,
                     turbo_fp16_layers=args.turbo_fp16_layers,
                 )
+                continue
+            if query == "/clear":
+                prompt_cache = make_prompt_cache(
+                    model,
+                    args.max_kv_size,
+                    turbo_kv_bits=args.turbo_kv_bits,
+                    turbo_fp16_layers=args.turbo_fp16_layers,
+                )
+                rprint("[INFO] Conversation cleared.")
                 continue
             if query == "h":
                 print_help()
@@ -389,6 +406,7 @@ def main():
             )
 
         last_response = None
+        stop_generation = False
         for response in stream_generate(
             model,
             tokenizer,
@@ -410,8 +428,19 @@ def main():
         ):
             rprint(response.text, flush=True, end="")
             last_response = response
-        rprint()
-        if last_response:
+            if sys.platform != "win32":
+                if select.select([sys.stdin], [], [], 0)[0]:
+                    try:
+                        char = os.read(sys.stdin.fileno(), 1)
+                        if char == b"\x04" or char == b"":
+                            rprint("\n[INFO] Generation stopped by user.")
+                            stop_generation = True
+                            break
+                    except Exception:
+                        pass
+        if not stop_generation:
+            rprint()
+        if last_response and not stop_generation:
             rprint(
                 f"[INFO] Generated {last_response.generation_tokens} tokens "
                 f"at {last_response.generation_tps:.2f} tokens/sec "
@@ -419,6 +448,8 @@ def main():
             )
 
         prompt = None
+        if stop_generation:
+            rprint("[INFO] Press Ctrl-d again to exit or enter a new message.")
 
 
 if __name__ == "__main__":
