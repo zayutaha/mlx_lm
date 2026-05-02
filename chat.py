@@ -106,7 +106,7 @@ class ChatInput(TextArea):
             self.app.exit()
             return
 
-        if event.key == "ctrl+d":
+        if event.key == "escape":
             event.prevent_default()
             event.stop()
             await self.app.action_interrupt()
@@ -132,16 +132,14 @@ class ChatUI(App):
 
     #splash-logo {
         text-align: center;
-        color: #3a6b8a;
+        color: #f0a500;
         margin-bottom: 1;
     }
 
     #load-spinner {
-        margin-top: 1;
-        width: auto;
+        width: 1fr;
         border: none;
         text-align: center;
-        padding-left: 37;
     }
 
     #chat-center {
@@ -224,6 +222,7 @@ class ChatUI(App):
     async def on_mount(self):
         self.busy = False
         self.interrupted = False
+        self.first_message = True
         asyncio.create_task(self.initialize_model())
 
     async def initialize_model(self):
@@ -295,6 +294,11 @@ class ChatUI(App):
         return buf
 
     async def run_model(self, user_text: str):
+        # Add extra delay for first message to ensure model is ready
+        if self.first_message:
+            await asyncio.sleep(2)
+            self.first_message = False
+
         self.proc.stdin.write((user_text + "\n").encode())
         await self.proc.stdin.drain()
 
