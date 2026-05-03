@@ -111,12 +111,10 @@ class ThinkingSpinner(Static):
 
 class ChatInput(TextArea):
     def on_mount(self) -> None:
-        """Set initial height when mounted."""
+        """Set initial height and watch for changes."""
         self.update_height()
-
-    def watch_text(self, text: str) -> None:
-        """Update height whenever text changes."""
-        self.update_height()
+        # Check height periodically to catch paste events
+        self.set_interval(0.1, self.update_height)
 
     async def _on_key(self, event: Key) -> None:
         if event.key is None:
@@ -141,13 +139,18 @@ class ChatInput(TextArea):
             return
 
         await super()._on_key(event)
+        self.update_height()
 
     def update_height(self):
         """Update input height based on number of lines."""
-        lines = len(self.text.split("\n"))
-        max_lines = 5
-        new_height = min(lines, max_lines)
-        self.styles.height = max(1, new_height)
+        if not self.text:
+            new_height = 1
+        else:
+            lines = len(self.text.split("\n"))
+            max_lines = 5
+            new_height = min(max(1, lines), max_lines)
+        
+        self.styles.height = new_height
 
 
 class ChatUI(App):
