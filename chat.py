@@ -92,6 +92,23 @@ class LoadingSpinner(Static):
         self.update(f"[bold #f0a500]{self.SPINNERS[self.spinner_index]} Loading...")
 
 
+class ThinkingSpinner(Static):
+    """Custom animated spinner for thinking mode."""
+    SPINNERS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.spinner_index = 0
+        self.update(f"Thinking... {self.SPINNERS[0]}")
+    
+    def on_mount(self):
+        self.set_interval(0.1, self.update_spinner)
+    
+    def update_spinner(self):
+        self.spinner_index = (self.spinner_index + 1) % len(self.SPINNERS)
+        self.update(f"Thinking... {self.SPINNERS[self.spinner_index]}")
+
+
 class BrainButton(Static):
     """Compact brain toggle button that doesn't steal focus."""
     
@@ -422,7 +439,7 @@ class ChatUI(App):
             if currently_thinking and not in_thinking:
                 # Thinking just started
                 in_thinking = True
-                thinking_spinner = LoadingSpinner()
+                thinking_spinner = ThinkingSpinner()
                 await chat.mount(thinking_spinner)
                 # Clear the current markdown to hide thinking text
                 await self.current_md.update("")
