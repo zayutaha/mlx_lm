@@ -117,24 +117,28 @@ class ChatInput(TextArea):
         self.set_interval(0.05, self.check_size)
 
     def check_size(self):
-        """Check content size and update height based on text length."""
+        """Check content size and update parent container height."""
         try:
             text = self.text
             
             if not text:
-                self.styles.height = 1
-                return
+                new_height = 1
+            else:
+                # Calculate lines from actual document
+                lines = self.document.line_count
+                # Cap at 5 lines max
+                new_height = min(lines, 5)
+                new_height = max(new_height, 1)  # Min 1 line
             
-            # Calculate lines from actual document
-            lines = self.document.line_count
+            # Update the parent input-card min_height
+            parent = self.parent
+            if parent and parent.id == "input-card":
+                parent.styles.min_height = new_height
             
-            # Cap at 5 lines max
-            new_height = min(lines, 5)
-            new_height = max(new_height, 1)  # Min 1 line
+            # Also set own min_height instead of height
+            self.styles.min_height = new_height
             
-            self.styles.height = new_height
-            
-        except Exception as e:
+        except Exception:
             pass
 
     async def _on_key(self, event: Key) -> None:
@@ -238,6 +242,7 @@ class ChatUI(App):
         background: #161616;
         border: round #252525;
         height: auto;
+        max-height: 5;
         layout: horizontal;
     }
 
@@ -247,7 +252,8 @@ class ChatUI(App):
         border: none;
         width: 1fr;
         margin: 0 1;
-        overflow: hidden;
+        min-height: 1;
+        max-height: 5;
     }
 
     #send-btn {
