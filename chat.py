@@ -266,7 +266,7 @@ class ChatUI(App):
                 yield ChatInput(id="input")
                 yield Static(" SEND ", id="send-btn")
 
-     async def on_mount(self):
+    async def on_mount(self):
         self.busy = False
         self.interrupted = False
         self.first_message = True
@@ -301,7 +301,7 @@ class ChatUI(App):
         
         self.query_one("#input").focus()
 
-     async def action_submit(self):
+    async def action_submit(self):
         if self.busy:
             return
 
