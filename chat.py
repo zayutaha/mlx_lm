@@ -399,7 +399,6 @@ class ChatUI(App):
 
         buf = ""
         last_update = 0
-        thinking_spinner = None
         chat = self.query_one("#chat", VerticalScroll)
         in_thinking = False
 
@@ -424,6 +423,19 @@ class ChatUI(App):
             # No thinking tags, return buffer as-is
             return buffer.strip()
 
+        # Spinner state
+        spinner_task = None
+        spinner_index = 0
+        spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+        async def update_spinner():
+            """Animate spinner in markdown widget."""
+            nonlocal spinner_index
+            while in_thinking:
+                spinner_index = (spinner_index + 1) % len(spinner_frames)
+                await self.current_md.update(f"Thinking... {spinner_frames[spinner_index]}")
+                await asyncio.sleep(0.1)
+
         while True:
             chunk = await self.proc.stdout.read(256)
             if not chunk:
@@ -439,16 +451,18 @@ class ChatUI(App):
             if currently_thinking and not in_thinking:
                 # Thinking just started
                 in_thinking = True
-                thinking_spinner = ThinkingSpinner()
-                await chat.mount(thinking_spinner)
-                # Clear the current markdown to hide thinking text
-                await self.current_md.update("")
+                # Start spinner animation
+                spinner_task = asyncio.create_task(update_spinner())
             elif not currently_thinking and in_thinking:
                 # Thinking just ended
                 in_thinking = False
-                if thinking_spinner:
-                    await thinking_spinner.remove()
-                    thinking_spinner = None
+                if spinner_task:
+                    spinner_task.cancel()
+                    try:
+                        await spinner_task
+                    except asyncio.CancelledError:
+                        pass
+                    spinner_task = None
 
             # Update display if not thinking
             if not in_thinking:
@@ -466,8 +480,12 @@ class ChatUI(App):
             self.interrupted = False
 
         # Clean up spinner if still active
-        if thinking_spinner:
-            await thinking_spinner.remove()
+        if spinner_task:
+            spinner_task.cancel()
+            try:
+                await spinner_task
+            except asyncio.CancelledError:
+                pass
 
         await self.current_md.update(display)
         chat.scroll_end(animate=False)
