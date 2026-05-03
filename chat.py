@@ -113,6 +113,16 @@ class ChatInput(TextArea):
     def on_mount(self) -> None:
         """Initialize the input."""
         self.show_line_numbers = False
+        self.soft_wrap = True
+        self.set_interval(0.05, self.sync_height)
+
+    def sync_height(self) -> None:
+        """Sync widget height to content height (including wrapped lines)."""
+        target_height = min(max(1, self.virtual_size.height), 5)
+        current = self.styles.height
+        if current is None or getattr(current, 'value', current) != target_height:
+            self.styles.height = target_height
+            self.refresh()
 
     async def _on_key(self, event: Key) -> None:
         if event.key is None:
@@ -214,7 +224,7 @@ class ChatUI(App):
         width: 88;
         background: #161616;
         border: round #252525;
-        height: 3;
+        height: auto;
         layout: horizontal;
     }
 
