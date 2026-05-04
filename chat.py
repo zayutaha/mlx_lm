@@ -455,7 +455,6 @@ class ChatUI(App):
                     display = strip_prompt_markers(transform_math(buf))
                     await self.current_md.update(f"{display} ▌")
 
-                chat.scroll_end(animate=False)
                 last_update = now
 
         if thinking_enabled:
@@ -468,7 +467,16 @@ class ChatUI(App):
             self.interrupted = False
 
         await self.current_md.update(display)
-        chat.scroll_end(animate=False)
+        # Only scroll to bottom on completion if user is near bottom
+        scroll_y = chat.scroll_offset.y
+        virtual_h = chat.virtual_size.height
+        widget_h = chat.region.height
+        if virtual_h <= widget_h:
+            chat.scroll_end(animate=False)
+        else:
+            max_scroll_y = virtual_h - widget_h
+            if max_scroll_y - scroll_y <= 50:
+                chat.scroll_end(animate=False)
         self._set_busy(False)
 
 
