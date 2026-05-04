@@ -387,7 +387,7 @@ class ChatUI(App):
         spinner.update(f"[bold #f0a500]{spinner.SPINNERS[0]} {spinner.message}")
 
     async def action_submit(self):
-        if self.busy or self.loading:
+        if self.busy or self.loading or not self.proc or self.proc.returncode is not None:
             return
 
         box = self.query_one("#input", ChatInput)
@@ -433,8 +433,7 @@ class ChatUI(App):
         self.crash_count += 1
 
         if self.crash_count >= self.max_crashes:
-            self.loading = False
-            self._show_chat_ui()
+            self.exit("Too many crashes, giving up")
             return
 
         self.reloading = True
@@ -465,13 +464,17 @@ class ChatUI(App):
             await asyncio.sleep(2)
             self.first_message = False
 
+        if not self.proc or self.proc.returncode is not None:
+            await self._handle_crash("")
+            return
+
         user_text = " ".join(user_text.split("\n"))
 
         try:
             self.proc.stdin.write((user_text + "\n").encode())
             await self.proc.stdin.drain()
-        except Exception as e:
-            await self._handle_crash(f"Failed to send: {e}")
+        except Exception:
+            await self._handle_crash("")
             return
 
         buf = ""
@@ -491,12 +494,12 @@ class ChatUI(App):
         while True:
             try:
                 chunk = await self.proc.stdout.read(256)
-            except Exception as e:
-                await self._handle_crash(f"Read error: {e}")
+            except Exception:
+                await self._handle_crash("")
                 return
 
             if not chunk:
-                await self._handle_crash("Model process crashed")
+                await self._handle_crash("")
                 return
 
             buf += chunk.decode(errors="ignore")
