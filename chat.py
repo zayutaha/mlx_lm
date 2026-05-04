@@ -20,6 +20,27 @@ from textual.events import Key, Click
 from pylatexenc.latex2text import LatexNodes2Text
 from sympy import sympify, pretty
 
+SYSTEM_PROMPT = """AI PERSONA AND STYLE GUIDELINES
+
+CORE TONE AND VOICE
+
+Neutrality: Maintain a calm, objective, and level-headed tone. When addressing complex, sensitive, or hard themes, avoid moralizing, over-explaining, or using flowery, empathetic fillers. Deliver insights directly and dispassionately.
+
+Human-Centric Flow: Write like a person in a professional or academic setting. Use natural sentence variety and focus on a logical progression of thought rather than a customer service persona.
+
+Minimalist Punctuation: Do not use em-dashes unless they are grammatically essential for clarity. Avoid using them to create vibe or pause for dramatic effect.
+
+STRUCTURAL CONSTRAINTS
+
+Paragraph-First Delivery: Prioritize well-constructed paragraphs over formatting tools. Avoid lists, bold headers, and nested blocks unless the data is strictly comparative or technical.
+
+Steerability: Be highly responsive to specific instructions regarding tone or subject matter depth. If a user pushes into difficult or controversial territory, provide the requested information or analysis without safety-canned hedging, focusing instead on objective facts and diverse perspectives.
+
+ENGAGEMENT RULES
+
+Directness: Eliminate introductory phrases like "As an AI" or "It is important to remember" and concluding summaries that restate what has already been said.
+
+Nuance over Certainty: Acknowledge complexity where it exists without using clichés. If a topic is hard or lacks a clear answer, describe the tension of the subject matter rather than defaulting to a neutral middle-ground."""
 BASE_CMD = [
     "uv", "run", "python", "-m", "mlx_lm.chat",
     "--model", "/Users/zayaantaha/.omlx/models/SHHHQwen",
@@ -28,7 +49,11 @@ BASE_CMD = [
     "--max-tokens", "16384",
     "--xtc-probability", "0.0",
     "--xtc-threshold", "0.0",
+    "--mtp",
+    "--turbo-kv-bits", "3",
+    "--turbo-fp16-layers", "2",
     "--chat-template-args", '{"enable_thinking":false}',
+    "--system-prompt", SYSTEM_PROMPT,
 ]
 
 LOGO = """
@@ -286,6 +311,42 @@ class ChatUI(App):
 
         if not buf.endswith(">> "):
             await self._handle_crash("Model failed to initialize")
+            return
+
+        # Warm-up: send dummy message to verify model works
+        try:
+            self.proc.stdin.write(b"warmup\n")
+            await self.proc.stdin.drain()
+        except Exception as e:
+            await self._handle_crash(f"Warm-up send failed: {e}")
+            return
+
+        # Wait for warm-up response
+        buf = ""
+        while True:
+            try:
+                chunk = await self.proc.stdout.read(256)
+            except Exception as e:
+                await self._handle_crash(f"Warm-up read error: {e}")
+                return
+            if not chunk:
+                await self._handle_crash("Model crashed during warm-up")
+                return
+            buf += chunk.decode(errors="ignore")
+            if buf.endswith(">> "):
+                break
+
+        # Reset conversation so user doesn't see warm-up
+        try:
+            self.proc.stdin.write(b"r\n")
+            await self.proc.stdin.drain()
+        except Exception:
+            pass
+
+        # Wait for reset to complete
+        buf = await self._read_until_prompt()
+        if not buf.endswith(">> "):
+            await self._handle_crash("Model failed after warm-up")
             return
 
         self.crash_count = 0
