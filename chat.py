@@ -105,7 +105,7 @@ class LoadingSpinner(Static):
     """Custom animated loading spinner."""
     SPINNERS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
-    def __init__(self, message="Loading...", **kwargs):
+    def __init__(self, message="Loading model...", **kwargs):
         super().__init__(**kwargs)
         self.spinner_index = 0
         self.message = message
@@ -312,6 +312,12 @@ class ChatUI(App):
         if not buf.endswith(">> "):
             await self._handle_crash("Model failed to initialize")
             return
+
+        # Update spinner to show warming up phase
+        spinner = self.query_one("#load-spinner", LoadingSpinner)
+        spinner.message = "Warming up..."
+        spinner.spinner_index = 0
+        spinner.update(f"[bold #f0a500]{spinner.SPINNERS[0]} {spinner.message}")
 
         # Warm-up: send dummy message to verify model works
         try:
