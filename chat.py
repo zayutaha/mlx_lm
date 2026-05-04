@@ -379,20 +379,11 @@ Screen {
             await self._handle_crash("")
             return
 
-        # Wait for warm-up response
-        buf = ""
-        while True:
-            try:
-                chunk = await self.proc.stdout.read(256)
-            except Exception:
-                await self._handle_crash("")
-                return
-            if not chunk:
-                await self._handle_crash("")
-                return
-            buf += chunk.decode(errors="ignore")
-            if buf.endswith(">> "):
-                break
+        # Wait for warm-up response (with timeout)
+        buf = await self._read_until_prompt(timeout=30)
+        if not buf.endswith(">> "):
+            await self._handle_crash("Model warm-up failed")
+            return
 
         # Reset conversation so user doesn't see warm-up
         try:
@@ -401,10 +392,10 @@ Screen {
         except Exception:
             pass
 
-        # Wait for reset to complete
-        buf = await self._read_until_prompt()
+        # Wait for reset to complete (with timeout)
+        buf = await self._read_until_prompt(timeout=10)
         if not buf.endswith(">> "):
-            await self._handle_crash("")
+            await self._handle_crash("Model reset failed")
             return
 
         self.crash_count = 0
@@ -563,10 +554,23 @@ Screen {
         elif event.button.id == "crash-quit":
             self.exit("Model crashed")
 
-    async def _read_until_prompt(self):
+    async def _read_until_prompt(self, timeout=60):
+        """Read until '>> ' prompt, with timeout."""
         buf = ""
+        start_time = asyncio.get_event_loop().time()
         while True:
-            chunk = await self.proc.stdout.read(256)
+            # Check timeout
+            if asyncio.get_event_loop().time() - start_time > timeout:
+                return buf  # Return whatever we got
+            
+            try:
+                # Use wait_for to add timeout on read
+                chunk = await asyncio.wait_for(
+                    self.proc.stdout.read(256), timeout=1.0
+                )
+            except asyncio.TimeoutError:
+                continue
+            
             if not chunk:
                 break
             buf += chunk.decode(errors="ignore")
