@@ -14,8 +14,8 @@ import re
 import os
 import random
 from textual.app import App, ComposeResult
-from textual.widgets import Markdown, TextArea, Static
-from textual.containers import VerticalScroll, Vertical, Horizontal, Center
+from textual.widgets import Markdown, TextArea, Static, Button
+from textual.containers import VerticalScroll, Vertical, Horizontal, Center, Middle
 from textual.events import Key, Click
 from pylatexenc.latex2text import LatexNodes2Text
 from sympy import sympify, pretty
@@ -263,27 +263,67 @@ class ChatUI(App):
       }
 
      .bubble-prompt {
-        margin: 3 0;
-        padding: 3;
-        width: 100%;
-        color: #f0a500;
-        text-style: bold;
-        height: auto;
-    }
-     """
+         margin: 3 0;
+         padding: 3;
+         width: 100%;
+         color: #f0a500;
+         text-style: bold;
+         height: auto;
+     }
 
-    def compose(self) -> ComposeResult:
-        with Center(id="splash-container"):
-            yield Static(LOGO, id="splash-logo")
-            yield LoadingSpinner(id="load-spinner")
+     #crash-dialog-container {
+         layout: vertical;
+         width: 100%;
+         height: 100%;
+         align: center middle;
+         display: none;
+         background: rgba(0, 0, 0, 0.7);
+     }
 
-        with Vertical(id="chat-center"):
-            yield VerticalScroll(id="chat")
+     #crash-dialog {
+         width: 40;
+         height: auto;
+         background: #1a1a1a;
+         border: round #f0a500;
+         padding: 2;
+         align: center middle;
+     }
 
-        with Center(id="input-center"):
-            with Horizontal(id="input-card"):
-                yield ChatInput(id="input")
-                yield Static(" SEND ", id="send-btn")
+     .crash-message {
+         color: #f0a500;
+         text-align: center;
+         margin-bottom: 1;
+     }
+
+     .crash-buttons {
+         align: center middle;
+         height: auto;
+     }
+
+     .crash-buttons Button {
+         margin: 0 1;
+     }
+      """
+
+     def compose(self) -> ComposeResult:
+         with Center(id="splash-container"):
+             yield Static(LOGO, id="splash-logo")
+             yield LoadingSpinner(id="load-spinner")
+
+         with Vertical(id="chat-center"):
+             yield VerticalScroll(id="chat")
+
+         with Center(id="input-center"):
+             with Horizontal(id="input-card"):
+                 yield ChatInput(id="input")
+                 yield Static(" SEND ", id="send-btn")
+
+         with Middle(id="crash-dialog-container"):
+             with Vertical(id="crash-dialog", classes="crash-dialog"):
+                 yield Static("Model crashed. What do you want to do?", id="crash-message", classes="crash-message")
+                 with Horizontal(classes="crash-buttons"):
+                     yield Button("Reload", id="crash-reload", variant="primary")
+                     yield Button("Quit", id="crash-quit", variant="error")
 
     async def on_mount(self):
         self.busy = False
@@ -427,7 +467,7 @@ class ChatUI(App):
             self.interrupted = True
 
     async def _handle_crash(self, error_msg):
-        """Handle model crash: reload model."""
+        """Handle model crash: show dialog with quit/reload options."""
         self._set_busy(False)
         self.loading = True
         self.crash_count += 1
@@ -436,17 +476,25 @@ class ChatUI(App):
             self.exit("Too many crashes, giving up")
             return
 
+        # Show crash dialog
         self.reloading = True
-        self._show_loading_ui(f"Reloading model (crash #{self.crash_count})...")
+        self.query_one("#crash-dialog-container").display = True
+        self.query_one("#crash-message").update(f"Model crashed (attempt {self.crash_count}/{self.max_crashes}). Reload or quit?")
 
-        if self.proc and self.proc.returncode is None:
-            try:
-                self.proc.kill()
-                await self.proc.wait()
-            except Exception:
-                pass
-
-        asyncio.create_task(self.initialize_model())
+    async def on_button_pressed(self, event: Button.Pressed):
+        """Handle crash dialog button presses."""
+        if event.button.id == "crash-reload":
+            self.query_one("#crash-dialog-container").display = False
+            self._show_loading_ui(f"Reloading model (crash #{self.crash_count})...")
+            if self.proc and self.proc.returncode is None:
+                try:
+                    self.proc.kill()
+                    await self.proc.wait()
+                except Exception:
+                    pass
+            asyncio.create_task(self.initialize_model())
+        elif event.button.id == "crash-quit":
+            self.exit("Model crashed")
 
     async def _read_until_prompt(self):
         buf = ""
