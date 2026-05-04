@@ -525,18 +525,19 @@ Screen {
         self._set_busy(False)
         self.crash_dialog_visible = False
         self.query_one("#crash-dialog-container").display = False
-        # Clear chat history
-        chat = self.query_one("#chat", VerticalScroll)
-        await chat.remove()
-        await self.query_one("#chat-center").mount(VerticalScroll(id="chat"))
-        self.crash_count = 0
-        self._show_loading_ui("Reloading model...")
+        # Quit existing model process first
         if self.proc and self.proc.returncode is None:
             try:
                 self.proc.kill()
                 await self.proc.wait()
             except Exception:
                 pass
+        # Clear chat history
+        chat = self.query_one("#chat", VerticalScroll)
+        await chat.remove()
+        await self.query_one("#chat-center").mount(VerticalScroll(id="chat"))
+        self.crash_count = 0
+        self._show_loading_ui("Reloading model...")
         asyncio.create_task(self.initialize_model())
 
     async def on_button_pressed(self, event: Button.Pressed):
