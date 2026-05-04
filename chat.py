@@ -14,8 +14,7 @@ import re
 import os
 import random
 from textual.app import App, ComposeResult
-from textual.widgets import Markdown, TextArea, Static, Button
-from textual import on
+from textual.widgets import Markdown, TextArea, Static
 from textual.containers import VerticalScroll, Vertical, Horizontal, Center
 from textual.events import Key, Click
 from pylatexenc.latex2text import LatexNodes2Text
@@ -23,7 +22,7 @@ from sympy import sympify, pretty
 
 BASE_CMD = [
     "uv", "run", "python", "-m", "mlx_lm.chat",
-    "--model", "/Users/zayaantaha/.omlx/models/Qwwwen",
+    "--model", "/Users/zayaantaha/.omlx/models/SHHHQwen",
     "--mtp",
     "--turbo-kv-bits", "3",
     "--turbo-fp16-layers", "2",
@@ -78,35 +77,19 @@ def strip_prompt_markers(text: str) -> str:
 class LoadingSpinner(Static):
     """Custom animated loading spinner."""
     SPINNERS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-    
-    def __init__(self, **kwargs):
+
+    def __init__(self, message="Loading...", **kwargs):
         super().__init__(**kwargs)
         self.spinner_index = 0
-        self.update(f"[bold #f0a500]{self.SPINNERS[0]} Loading...")
-    
+        self.message = message
+        self.update(f"[bold #f0a500]{self.SPINNERS[0]} {self.message}")
+
     def on_mount(self):
         self.set_interval(0.1, self.update_spinner)
-    
+
     def update_spinner(self):
         self.spinner_index = (self.spinner_index + 1) % len(self.SPINNERS)
-        self.update(f"[bold #f0a500]{self.SPINNERS[self.spinner_index]} Loading...")
-
-
-class ThinkingSpinner(Static):
-    """Custom animated spinner for thinking mode."""
-    SPINNERS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-    
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.spinner_index = 0
-        self.update(f"Thinking... {self.SPINNERS[0]}")
-    
-    def on_mount(self):
-        self.set_interval(0.1, self.update_spinner)
-    
-    def update_spinner(self):
-        self.spinner_index = (self.spinner_index + 1) % len(self.SPINNERS)
-        self.update(f"Thinking... {self.SPINNERS[self.spinner_index]}")
+        self.update(f"[bold #f0a500]{self.SPINNERS[self.spinner_index]} {self.message}")
 
 
 class ChatInput(TextArea):
@@ -114,6 +97,7 @@ class ChatInput(TextArea):
         """Initialize the input."""
         self.show_line_numbers = False
         self.soft_wrap = True
+        self.styles.height = 1
         self.set_interval(0.05, self.sync_height)
 
     def sync_height(self) -> None:
@@ -277,10 +261,15 @@ class ChatUI(App):
     async def on_mount(self):
         self.busy = False
         self.interrupted = False
+        self.loading = False
         self.first_message = True
+        self.reloading = False
+        self.crash_count = 0
+        self.max_crashes = 3
         asyncio.create_task(self.initialize_model())
 
     async def initialize_model(self):
+        self.loading = True
         env = os.environ.copy()
         env["PYTHONPATH"] = os.getcwd()
         self.proc = await asyncio.create_subprocess_exec(
@@ -291,26 +280,45 @@ class ChatUI(App):
             env=env,
         )
 
-        await self._read_until_prompt()
+        buf = await self._read_until_prompt()
 
+        if not buf.endswith(">> "):
+            await self._handle_crash("Model failed to initialize")
+            return
+
+        self.crash_count = 0
+        self._show_chat_ui()
+
+    def _show_chat_ui(self):
+        self.loading = False
         self.query_one("#splash-container").display = False
         self.query_one("#chat-center").display = True
         self.query_one("#input-center").display = True
-        
-        # Show random welcome message in chat, centered
+
+        if self.reloading:
+            self.reloading = False
+            self.query_one("#input").focus()
+            return
+
         chat = self.query_one("#chat", VerticalScroll)
         welcome = random.choice(WELCOME_MESSAGES)
-        await chat.mount(Markdown(f"```\n{welcome}\n```", classes="bubble-welcome"))
-        
-        # Show prompt message
-        await chat.mount(Static("How can I help you?", classes="bubble-prompt"))
-        
+        chat.mount(Markdown(f"```\n{welcome}\n```", classes="bubble-welcome"))
+        chat.mount(Static("How can I help you?", classes="bubble-prompt"))
         chat.scroll_end(animate=False)
-        
         self.query_one("#input").focus()
 
+    def _show_loading_ui(self, message="Loading model..."):
+        self.query_one("#chat-center").display = False
+        self.query_one("#input-center").display = False
+        splash = self.query_one("#splash-container")
+        splash.display = True
+        spinner = self.query_one("#load-spinner", LoadingSpinner)
+        spinner.message = message
+        spinner.spinner_index = 0
+        spinner.update(f"[bold #f0a500]{spinner.SPINNERS[0]} {spinner.message}")
+
     async def action_submit(self):
-        if self.busy:
+        if self.busy or self.loading:
             return
 
         box = self.query_one("#input", ChatInput)
@@ -349,6 +357,35 @@ class ChatUI(App):
             await self.proc.stdin.drain()
             self.interrupted = True
 
+    async def _handle_crash(self, error_msg):
+        """Handle model crash: show error, then reload."""
+        self._set_busy(False)
+        self.loading = True
+        self.crash_count += 1
+
+        chat = self.query_one("#chat", VerticalScroll)
+        await chat.mount(Static(f"[red]⚠ {error_msg} (crash #{self.crash_count})[/red]", classes="bubble-prompt"))
+        chat.scroll_end(animate=False)
+
+        if self.crash_count >= self.max_crashes:
+            await chat.mount(Static(f"[red]⚠ Too many crashes ({self.max_crashes}), giving up.[/red]", classes="bubble-prompt"))
+            chat.scroll_end(animate=False)
+            self.loading = False
+            self._show_chat_ui()
+            return
+
+        self.reloading = True
+        self._show_loading_ui(f"Reloading model (crash #{self.crash_count})...")
+
+        if self.proc and self.proc.returncode is None:
+            try:
+                self.proc.kill()
+                await self.proc.wait()
+            except Exception:
+                pass
+
+        asyncio.create_task(self.initialize_model())
+
     async def _read_until_prompt(self):
         buf = ""
         while True:
@@ -361,13 +398,18 @@ class ChatUI(App):
         return buf
 
     async def run_model(self, user_text: str):
-        # Add extra delay for first message to ensure model is ready
         if self.first_message:
             await asyncio.sleep(2)
             self.first_message = False
 
-        self.proc.stdin.write((user_text + "\n").encode())
-        await self.proc.stdin.drain()
+        user_text = " ".join(user_text.split("\n"))
+
+        try:
+            self.proc.stdin.write((user_text + "\n").encode())
+            await self.proc.stdin.drain()
+        except Exception as e:
+            await self._handle_crash(f"Failed to send: {e}")
+            return
 
         buf = ""
         last_update = 0
@@ -375,25 +417,25 @@ class ChatUI(App):
         thinking_enabled = user_text.startswith("/think")
 
         def get_display_text(buffer):
-            """Extract display text (after thinking blocks)."""
-            # Find the last occurrence of </think>
             last_end = buffer.rfind("</think>")
-            
             if last_end >= 0:
-                # Return text after the last </think> tag
                 return buffer[last_end + len("</think>"):].strip()
-            
-            # No thinking end tag found yet
             return ""
 
-        # Spinner state
         spinner_index = 0
         spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
         while True:
-            chunk = await self.proc.stdout.read(256)
+            try:
+                chunk = await self.proc.stdout.read(256)
+            except Exception as e:
+                await self._handle_crash(f"Read error: {e}")
+                return
+
             if not chunk:
-                break
+                await self._handle_crash("Model process crashed")
+                return
+
             buf += chunk.decode(errors="ignore")
 
             if buf.endswith(">> "):
@@ -402,30 +444,25 @@ class ChatUI(App):
             now = asyncio.get_event_loop().time()
             if now - last_update > 0.05:
                 if thinking_enabled:
-                    # Check if we have the closing tag
                     if "</think>" not in buf:
-                        # Still waiting - show spinner
                         spinner_index = (spinner_index + 1) % len(spinner_frames)
                         await self.current_md.update(f"Thinking... {spinner_frames[spinner_index]}")
                     else:
-                        # Got closing tag - show response
                         display = strip_prompt_markers(transform_math(get_display_text(buf)))
                         if display:
                             await self.current_md.update(f"{display} ▌")
                 else:
-                    # Not thinking - show response immediately
                     display = strip_prompt_markers(transform_math(buf))
                     await self.current_md.update(f"{display} ▌")
-                
+
                 chat.scroll_end(animate=False)
                 last_update = now
 
-        # Final update
         if thinking_enabled:
             display = strip_prompt_markers(transform_math(get_display_text(buf)))
         else:
             display = strip_prompt_markers(transform_math(buf))
-            
+
         if self.interrupted:
             display += "\n\n*— stopped*"
             self.interrupted = False
