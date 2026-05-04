@@ -210,11 +210,11 @@ class ChatUI(App):
         color: #d8d8d8;
     }
 
-     .bubble-assistant {
-         margin-bottom: 1;
-         padding: 1 2 0 2;
-         color: #f0a500;
-     }
+    .bubble-assistant {
+        margin-bottom: 1;
+        padding: 1 2 0 2;
+        color: #f0a500;
+    }
 
     .bubble-welcome {
         margin-bottom: 1;
@@ -231,7 +231,7 @@ class ChatUI(App):
         display: none;
     }
 
-     #input-card {
+    #input-card {
         width: 88;
         background: #161616;
         border: round #252525;
@@ -239,7 +239,7 @@ class ChatUI(App):
         layout: horizontal;
     }
 
-     #input {
+    #input {
         background: #161616;
         color: #e0e0e0;
         border: none;
@@ -257,53 +257,53 @@ class ChatUI(App):
         height: 100%;
     }
 
-     #send-btn.stopping {
-          background: #e05a5a;
-          color: #fff;
-      }
+    #send-btn.stopping {
+        background: #e05a5a;
+        color: #fff;
+    }
 
-     .bubble-prompt {
-         margin: 3 0;
-         padding: 3;
-         width: 100%;
-         color: #f0a500;
-         text-style: bold;
-         height: auto;
-     }
+    .bubble-prompt {
+        margin: 3 0;
+        padding: 3;
+        width: 100%;
+        color: #f0a500;
+        text-style: bold;
+        height: auto;
+    }
 
-     #crash-dialog-container {
-         layout: vertical;
-         width: 100%;
-         height: 100%;
-         align: center middle;
-         display: none;
-         background: rgba(0, 0, 0, 0.7);
-     }
+    #crash-dialog-container {
+        layout: vertical;
+        width: 100%;
+        height: 100%;
+        align: center middle;
+        display: none;
+        background: rgba(0, 0, 0, 0.7);
+    }
 
-     #crash-dialog {
-         width: 40;
-         height: auto;
-         background: #1a1a1a;
-         border: round #f0a500;
-         padding: 2;
-         align: center middle;
-     }
+    #crash-dialog {
+        width: 40;
+        height: auto;
+        background: #1a1a1a;
+        border: round #f0a500;
+        padding: 2;
+        align: center middle;
+    }
 
-     .crash-message {
-         color: #f0a500;
-         text-align: center;
-         margin-bottom: 1;
-     }
+    .crash-message {
+        color: #f0a500;
+        text-align: center;
+        margin-bottom: 1;
+    }
 
-     .crash-buttons {
-         align: center middle;
-         height: auto;
-     }
+    .crash-buttons {
+        align: center middle;
+        height: auto;
+    }
 
-     .crash-buttons Button {
-         margin: 0 1;
-     }
-      """
+    .crash-buttons Button {
+        margin: 0 1;
+    }
+    """
 
      def compose(self) -> ComposeResult:
          with Center(id="splash-container"):
