@@ -493,6 +493,15 @@ Screen {
         self.reloading = True
         self.query_one("#crash-dialog-container").display = True
         self.query_one("#crash-message").update(f"Model crashed (attempt {self.crash_count}/{self.max_crashes}). Reload or quit?")
+        self.query_one("#crash-reload").focus()
+
+    async def on_key(self, event: Key) -> None:
+        """Handle key presses globally."""
+        # If crash dialog is visible and Enter is pressed, trigger reload
+        if event.key == "enter" and self.query_one("#crash-dialog-container").display:
+            self.query_one("#crash-reload").press()
+            event.prevent_default()
+            event.stop()
 
     async def on_button_pressed(self, event: Button.Pressed):
         """Handle crash dialog button presses."""
