@@ -522,21 +522,28 @@ Screen {
 
     async def action_reload_model(self) -> None:
         """Manually reload model with loading screen and warm-up."""
+        # Prevent multiple simultaneous reloads
+        if self.loading or self.reloading:
+            return
+        
         self._set_busy(False)
         self.crash_dialog_visible = False
         self.query_one("#crash-dialog-container").display = False
-        # Quit existing model process first
+        
+        # Kill existing model process first
         if self.proc and self.proc.returncode is None:
             try:
                 self.proc.kill()
                 await self.proc.wait()
             except Exception:
                 pass
+        
         # Clear chat history
         chat = self.query_one("#chat", VerticalScroll)
         await chat.remove()
         await self.query_one("#chat-center").mount(VerticalScroll(id="chat"))
         self.crash_count = 0
+        self.reloading = True
         self._show_loading_ui("Reloading model...")
         asyncio.create_task(self.initialize_model())
 
