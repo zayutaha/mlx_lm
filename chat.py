@@ -23,10 +23,12 @@ from sympy import sympify, pretty
 BASE_CMD = [
     "uv", "run", "python", "-m", "mlx_lm.chat",
     "--model", "/Users/zayaantaha/.omlx/models/SHHHQwen",
-    "--mtp",
-    "--turbo-kv-bits", "3",
-    "--turbo-fp16-layers", "2",
+    "--temp", "0.7",
+    "--top-p", "0.8",
     "--max-tokens", "16384",
+    "--xtc-probability", "0.0",
+    "--xtc-threshold", "0.0",
+    "--chat-template-args", '{"enable_thinking":false}',
 ]
 
 LOGO = """
