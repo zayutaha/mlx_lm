@@ -323,8 +323,8 @@ class ChatUI(App):
         try:
             self.proc.stdin.write(b"warmup\n")
             await self.proc.stdin.drain()
-        except Exception as e:
-            await self._handle_crash(f"Warm-up send failed: {e}")
+        except Exception:
+            await self._handle_crash("")
             return
 
         # Wait for warm-up response
@@ -332,11 +332,11 @@ class ChatUI(App):
         while True:
             try:
                 chunk = await self.proc.stdout.read(256)
-            except Exception as e:
-                await self._handle_crash(f"Warm-up read error: {e}")
+            except Exception:
+                await self._handle_crash("")
                 return
             if not chunk:
-                await self._handle_crash("Model crashed during warm-up")
+                await self._handle_crash("")
                 return
             buf += chunk.decode(errors="ignore")
             if buf.endswith(">> "):
@@ -352,7 +352,7 @@ class ChatUI(App):
         # Wait for reset to complete
         buf = await self._read_until_prompt()
         if not buf.endswith(">> "):
-            await self._handle_crash("Model failed after warm-up")
+            await self._handle_crash("")
             return
 
         self.crash_count = 0
@@ -427,18 +427,12 @@ class ChatUI(App):
             self.interrupted = True
 
     async def _handle_crash(self, error_msg):
-        """Handle model crash: show error, then reload."""
+        """Handle model crash: reload model."""
         self._set_busy(False)
         self.loading = True
         self.crash_count += 1
 
-        chat = self.query_one("#chat", VerticalScroll)
-        await chat.mount(Static(f"[red]⚠ {error_msg} (crash #{self.crash_count})[/red]", classes="bubble-prompt"))
-        chat.scroll_end(animate=False)
-
         if self.crash_count >= self.max_crashes:
-            await chat.mount(Static(f"[red]⚠ Too many crashes ({self.max_crashes}), giving up.[/red]", classes="bubble-prompt"))
-            chat.scroll_end(animate=False)
             self.loading = False
             self._show_chat_ui()
             return
