@@ -521,7 +521,11 @@ Screen {
             event.stop()
 
     async def action_reload_model(self) -> None:
-        """Manually reload model with loading screen and warm-up."""
+        """Manually reload model - only works if model has crashed."""
+        # Only allow reload if model is not already loaded and running
+        if self.proc and self.proc.returncode is None:
+            return  # Model is already running fine, don't reload
+        
         # Prevent multiple simultaneous reloads
         if self.loading or self.reloading:
             return
@@ -529,14 +533,6 @@ Screen {
         self._set_busy(False)
         self.crash_dialog_visible = False
         self.query_one("#crash-dialog-container").display = False
-        
-        # Kill existing model process first
-        if self.proc and self.proc.returncode is None:
-            try:
-                self.proc.kill()
-                await self.proc.wait()
-            except Exception:
-                pass
         
         # Clear chat history
         chat = self.query_one("#chat", VerticalScroll)
