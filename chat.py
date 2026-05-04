@@ -139,6 +139,10 @@ class ChatInput(TextArea):
         if event.key is None:
             return
 
+        # Don't capture keys if crash dialog is visible
+        if self.app.query_one("#crash-dialog-container").display:
+            return
+
         if event.key == "enter":
             event.prevent_default()
             event.stop()
