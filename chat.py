@@ -17,24 +17,6 @@ from textual.app import App, ComposeResult
 from textual.widgets import Markdown, TextArea, Static, Button
 from textual.containers import VerticalScroll, Vertical, Horizontal, Center, Middle
 from textual.events import Key, Click
-from latex_parser import parser as _latex_parser
-class LatexParser:
-    """Simple LaTeX to text converter for terminal output."""
-
-    # Greek letters
-    GREEK = {
-        'alpha': 'α', 'beta': 'β', 'gamma': 'γ', 'delta': 'δ', 'epsilon': 'ε',
-        'zeta': 'ζ', 'eta': 'η', 'theta': 'θ', 'iota': 'ι', 'kappa': 'κ',
-        'lambda': 'λ', 'mu': 'μ', 'nu': 'ν', 'xi': 'ξ', 'omicron': 'ο',
-        'pi': 'π', 'rho': 'ρ', 'sigma': 'σ', 'tau': 'τ', 'upsilon': 'υ',
-        'phi': 'φ', 'chi': 'χ', 'psi': 'ψ', 'omega': 'ω',
-        'Gamma': 'Γ', 'Delta': 'Δ', 'Theta': 'Θ', 'Lambda': 'Λ',
-        'Xi': 'Ξ', 'Pi': 'Π', 'Sigma': 'Σ', 'Upsilon': 'Υ',
-        'Phi': 'Φ', 'Psi': 'Ψ', 'Omega': 'Ω',
-    }
-
-# Global parser instance
-_latex_parser = LatexParser()
 
 SYSTEM_PROMPT = """AI PERSONA AND STYLE GUIDELINES
 
@@ -57,9 +39,12 @@ ENGAGEMENT RULES
 Directness: Eliminate introductory phrases like "As an AI" or "It is important to remember" and concluding summaries that restate what has already been said.
 
 Nuance over Certainty: Acknowledge complexity where it exists without using clichés. If a topic is hard or lacks a clear answer, describe the tension of the subject matter rather than defaulting to a neutral middle-ground."""
+
+MODEL_PATH = os.getenv("MLX_MODEL", "/Users/zayaantaha/.omlx/models/SSHVL")
+
 BASE_CMD = [
     "uv", "run", "python", "-m", "mlx_lm.chat",
-    "--model", "/Users/zayaantaha/.omlx/models/SHHHQwen",
+    "--model", MODEL_PATH,
     "--temp", "0.7",
     "--top-p", "0.8",
     "--max-tokens", "16384",
@@ -82,21 +67,6 @@ LOGO = """
 """
 
 WELCOME_MESSAGES = [LOGO]
-
-
-def normalize_latex(text: str) -> str:
-    text = re.sub(r"\\\((.*?)\\\)", r"$\1$", text, flags=re.DOTALL)
-    fixes = ["frac", "int", "sum", "sqrt", "sin", "cos", "tan", "log", "ln"]
-    for cmd in fixes:
-        text = re.sub(rf'(?<!\\)\b{cmd}\b', rf'\\{cmd}', text)
-    return text
-
-
-def transform_math(text: str) -> str:
-    text = normalize_latex(text)
-    text = re.sub(r"\$\$(.*?)\$\$", lambda m: _latex_parser.parse(m.group(1).strip()), text, flags=re.DOTALL)
-    text = re.sub(r"\$(.*?)\$", lambda m: _latex_parser.parse(m.group(1).strip()), text)
-    return text
 
 
 def strip_prompt_markers(text: str) -> str:
@@ -633,19 +603,19 @@ Screen {
                         spinner_index = (spinner_index + 1) % len(spinner_frames)
                         await self.current_md.update(f"Thinking... {spinner_frames[spinner_index]}")
                     else:
-                        display = strip_prompt_markers(transform_math(get_display_text(buf)))
+                        display = strip_prompt_markers(get_display_text(buf))
                         if display:
                             await self.current_md.update(f"{display} ▌")
                 else:
-                    display = strip_prompt_markers(transform_math(buf))
+                    display = strip_prompt_markers(buf)
                     await self.current_md.update(f"{display} ▌")
 
                 last_update = now
 
         if thinking_enabled:
-            display = strip_prompt_markers(transform_math(get_display_text(buf)))
+            display = strip_prompt_markers(get_display_text(buf))
         else:
-            display = strip_prompt_markers(transform_math(buf))
+            display = strip_prompt_markers(buf)
 
         if self.interrupted:
             display += "\n\n*— stopped*"
