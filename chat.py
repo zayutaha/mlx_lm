@@ -559,12 +559,28 @@ Screen {
         self.selected_model = model_name
         self.query_one("#model-selector-container").display = False
         
-        # Kill current model process (don't wait, just terminate it)
+        # Terminate current model process in background (don't block UI)
         if self.proc and self.proc.returncode is None:
-            try:
-                self.proc.kill()
-            except Exception:
-                pass
+            async def kill_proc():
+                try:
+                    # Try sending EOF first
+                    try:
+                        self.proc.stdin.write(b"\x04\n")
+                        await self.proc.stdin.drain()
+                    except:
+                        pass
+                    
+                    # Wait a bit for graceful exit
+                    try:
+                        await asyncio.wait_for(self.proc.wait(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        # Force kill if needed
+                        self.proc.kill()
+                except:
+                    pass
+            
+            # Start killing in background without blocking
+            asyncio.create_task(kill_proc())
         
         self._show_loading_ui(f"Loading {model_name}...")
         asyncio.create_task(self.initialize_model())
