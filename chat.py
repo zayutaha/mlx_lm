@@ -71,8 +71,8 @@ LOGO = """
 WELCOME_MESSAGES = [LOGO]
 
 
-def get_available_models() -> list[str]:
-    """Scan .omlx/models directory and return available model names."""
+def get_available_models() -> list[tuple[str, str, dict]]:
+    """Scan .omlx/models directory and return model info with size and capabilities."""
     models_dir = Path.home() / ".omlx" / "models"
     if not models_dir.exists():
         return []
@@ -80,7 +80,9 @@ def get_available_models() -> list[str]:
     models = []
     for item in sorted(models_dir.iterdir()):
         if item.is_dir():
-            models.append(item.name)
+            size = get_model_size(item.name)
+            caps = get_model_capabilities(item.name)
+            models.append((item.name, size, caps))
     return models
 
 
@@ -155,7 +157,7 @@ class ModelSelector(Static):
 
     can_focus = True
 
-    def __init__(self, models: list[str], **kwargs):
+    def __init__(self, models: list[tuple[str, str, dict]], **kwargs):
         super().__init__(**kwargs)
         self.models = models
         self.selected_index = 0
@@ -164,9 +166,7 @@ class ModelSelector(Static):
     def render_list(self):
         """Render the model list with selection indicator."""
         lines = ["[bold #f0a500]Select a model:[/bold #f0a500]\n"]
-        for i, model in enumerate(self.models):
-            size = get_model_size(model)
-            caps = get_model_capabilities(model)
+        for i, (model_name, size, caps) in enumerate(self.models):
             caps_str = []
             if caps["vision"]:
                 caps_str.append("👁 Vision")
@@ -175,10 +175,10 @@ class ModelSelector(Static):
             caps_display = " • ".join(caps_str) if caps_str else "—"
             
             if i == self.selected_index:
-                lines.append(f"[bold #f0a500]❯ {model}[/bold #f0a500]")
+                lines.append(f"[bold #f0a500]❯ {model_name}[/bold #f0a500]")
                 lines.append(f"  [dim]{size} | {caps_display}[/dim]")
             else:
-                lines.append(f"  {model}")
+                lines.append(f"  {model_name}")
                 lines.append(f"  [dim]{size} | {caps_display}[/dim]")
         
         lines.append("\n[dim](↑/↓ navigate, Enter select, Esc back, Ctrl+C quit)[/dim]")
@@ -196,7 +196,7 @@ class ModelSelector(Static):
             self.render_list()
         elif event.key == "enter":
             event.prevent_default()
-            selected_model = self.models[self.selected_index]
+            selected_model = self.models[self.selected_index][0]  # Get model name from tuple
             await self.app.action_model_selected(selected_model)
         elif event.key == "escape":
             event.prevent_default()
