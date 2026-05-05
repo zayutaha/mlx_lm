@@ -450,6 +450,7 @@ Screen {
         self.max_crashes = 3
         self.crash_dialog_visible = False
         self.selected_model = None
+        self.proc = None
         self.query_one("#model-selector-container").display = True
         self.query_one("#model-selector").focus()
 
@@ -558,7 +559,7 @@ Screen {
         self.selected_model = model_name
         self.query_one("#model-selector-container").display = False
         
-        # Kill current model process before loading new one
+        # Kill current model process before loading new one (only if it's running)
         if self.proc and self.proc.returncode is None:
             try:
                 self.proc.kill()
