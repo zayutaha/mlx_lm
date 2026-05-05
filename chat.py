@@ -563,12 +563,9 @@ Screen {
         if self.proc and self.proc.returncode is None:
             async def kill_proc():
                 try:
-                    # Try sending EOF first
-                    try:
-                        self.proc.stdin.write(b"\x04\n")
-                        await self.proc.stdin.drain()
-                    except:
-                        pass
+                    # Send Ctrl+C to exit cleanly
+                    self.proc.stdin.write(b"\x03")
+                    await self.proc.stdin.drain()
                     
                     # Wait a bit for graceful exit
                     try:
