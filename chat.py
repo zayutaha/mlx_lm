@@ -12,6 +12,7 @@ tk.key_to_character = safe_key_to_character
 import asyncio
 import re
 import os
+import json
 import random
 from pathlib import Path
 from textual.app import App, ComposeResult
@@ -83,6 +84,48 @@ def get_available_models() -> list[str]:
     return models
 
 
+def get_model_size(model_name: str) -> str:
+    """Calculate total size of model files in GB."""
+    model_dir = Path.home() / ".omlx" / "models" / model_name
+    if not model_dir.exists():
+        return "0 GB"
+    
+    total_bytes = 0
+    for file in model_dir.glob("**/*"):
+        if file.is_file():
+            total_bytes += file.stat().st_size
+    
+    gb = total_bytes / (1024 ** 3)
+    return f"{gb:.1f} GB"
+
+
+def get_model_capabilities(model_name: str) -> dict[str, bool]:
+    """Check model capabilities (vision, mtp, etc)."""
+    model_dir = Path.home() / ".omlx" / "models" / model_name
+    
+    has_vision = False
+    has_mtp = False
+    
+    # Check for vision capability via config.json
+    config_path = model_dir / "config.json"
+    if config_path.exists():
+        try:
+            with open(config_path) as f:
+                config = json.load(f)
+                if "image_token_id" in config or "vision_config" in config:
+                    has_vision = True
+        except Exception:
+            pass
+    
+    # Check for multimodal/vision files
+    if (model_dir / "preprocessor_config.json").exists():
+        has_mtp = True
+    if (model_dir / "video_preprocessor_config.json").exists():
+        has_mtp = True
+    
+    return {"vision": has_vision, "mtp": has_mtp}
+
+
 def strip_prompt_markers(text: str) -> str:
     lines = text.splitlines()
     clean = [l for l in lines if not l.strip().startswith(">>") and not l.startswith("[INFO]")]
@@ -120,13 +163,25 @@ class ModelSelector(Static):
 
     def render_list(self):
         """Render the model list with selection indicator."""
-        lines = ["Select a model:\n"]
+        lines = ["[bold #f0a500]Select a model:[/bold #f0a500]\n"]
         for i, model in enumerate(self.models):
+            size = get_model_size(model)
+            caps = get_model_capabilities(model)
+            caps_str = []
+            if caps["vision"]:
+                caps_str.append("👁 Vision")
+            if caps["mtp"]:
+                caps_str.append("🎬 MTP")
+            caps_display = " • ".join(caps_str) if caps_str else "—"
+            
             if i == self.selected_index:
-                lines.append(f"[bold #f0a500]> {model}[/bold #f0a500]")
+                lines.append(f"[bold #f0a500]❯ {model}[/bold #f0a500]")
+                lines.append(f"  [dim]{size} | {caps_display}[/dim]")
             else:
                 lines.append(f"  {model}")
-        lines.append("\n[dim](↑/↓ to navigate, Enter to select, Ctrl+C to quit)[/dim]")
+                lines.append(f"  [dim]{size} | {caps_display}[/dim]")
+        
+        lines.append("\n[dim](↑/↓ navigate, Enter select, Ctrl+C quit)[/dim]")
         self.update("\n".join(lines))
 
     async def on_key(self, event: Key) -> None:
@@ -348,8 +403,9 @@ Screen {
 }
 
 #model-selector {
-    width: 50;
+    width: 80;
     height: auto;
+    max-height: 30;
     background: #1a1a1a;
     border: round #f0a500;
     padding: 2;
