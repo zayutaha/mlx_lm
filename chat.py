@@ -110,6 +110,8 @@ class LoadingSpinner(Static):
 class ModelSelector(Static):
     """Model selection widget."""
 
+    can_focus = True
+
     def __init__(self, models: list[str], **kwargs):
         super().__init__(**kwargs)
         self.models = models
