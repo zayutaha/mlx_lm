@@ -557,6 +557,25 @@ Screen {
         self._show_loading_ui(f"Loading {model_name}...")
         asyncio.create_task(self.initialize_model())
 
+    async def show_model_selector(self):
+        """Show model selector during chat to switch models."""
+        self.query_one("#chat-center").display = False
+        self.query_one("#input-center").display = False
+        self.query_one("#model-selector-container").display = True
+        selector = self.query_one("#model-selector", ModelSelector)
+        selector.models = get_available_models()
+        selector.selected_index = 0
+        selector.render_list()
+        selector.focus()
+        
+        # Kill current model process
+        if self.proc and self.proc.returncode is None:
+            try:
+                self.proc.kill()
+                await self.proc.wait()
+            except Exception:
+                pass
+
     async def action_submit(self):
         if self.busy or self.loading or not self.proc or self.proc.returncode is not None:
             return
@@ -575,6 +594,11 @@ Screen {
             await chat.remove()
             await self.query_one("#chat-center").mount(VerticalScroll(id="chat"))
             self._set_busy(False)
+            return
+
+        # If /models command, show model selector
+        if user_text == "/models":
+            await self.show_model_selector()
             return
 
         await chat.mount(Markdown(user_text, classes="bubble-user"))
