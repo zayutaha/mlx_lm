@@ -181,7 +181,7 @@ class ModelSelector(Static):
                 lines.append(f"  {model}")
                 lines.append(f"  [dim]{size} | {caps_display}[/dim]")
         
-        lines.append("\n[dim](↑/↓ navigate, Enter select, Ctrl+C quit)[/dim]")
+        lines.append("\n[dim](↑/↓ navigate, Enter select, Esc back, Ctrl+C quit)[/dim]")
         self.update("\n".join(lines))
 
     async def on_key(self, event: Key) -> None:
@@ -198,6 +198,9 @@ class ModelSelector(Static):
             event.prevent_default()
             selected_model = self.models[self.selected_index]
             await self.app.action_model_selected(selected_model)
+        elif event.key == "escape":
+            event.prevent_default()
+            await self.app.action_dismiss_model_selector()
         elif event.key == "ctrl+c":
             event.prevent_default()
             self.app.exit()
@@ -554,8 +557,24 @@ Screen {
         """Handle model selection from the selector screen."""
         self.selected_model = model_name
         self.query_one("#model-selector-container").display = False
+        
+        # Kill current model process before loading new one
+        if self.proc and self.proc.returncode is None:
+            try:
+                self.proc.kill()
+                await self.proc.wait()
+            except Exception:
+                pass
+        
         self._show_loading_ui(f"Loading {model_name}...")
         asyncio.create_task(self.initialize_model())
+
+    async def action_dismiss_model_selector(self):
+        """Dismiss model selector and return to chat."""
+        self.query_one("#model-selector-container").display = False
+        self.query_one("#chat-center").display = True
+        self.query_one("#input-center").display = True
+        self.query_one("#input").focus()
 
     async def show_model_selector(self):
         """Show model selector during chat to switch models."""
@@ -567,14 +586,6 @@ Screen {
         selector.selected_index = 0
         selector.render_list()
         selector.focus()
-        
-        # Kill current model process
-        if self.proc and self.proc.returncode is None:
-            try:
-                self.proc.kill()
-                await self.proc.wait()
-            except Exception:
-                pass
 
     async def action_submit(self):
         if self.busy or self.loading or not self.proc or self.proc.returncode is not None:
