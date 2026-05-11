@@ -473,7 +473,6 @@ def main():
                 personality_name = query[len("/personality_set "):].strip()
                 if personality_name in PERSONALITIES:
                     current_system_prompt = PERSONALITIES[personality_name]
-                    rprint("[INFO] Personality updated.")
                 else:
                     available = ", ".join(PERSONALITIES.keys())
                     rprint(f"[ERROR] Unknown personality. Available: {available}")

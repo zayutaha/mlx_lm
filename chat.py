@@ -368,6 +368,16 @@ def get_model_capabilities(model_name: str) -> dict[str, bool]:
     return {"vision": has_vision, "mtp": has_mtp}
 
 
+def escape_markdown(text: str) -> str:
+    """Escape markdown special characters by wrapping in backticks."""
+    # Escape special markdown characters
+    chars_to_escape = ['\\', '`', '*', '_', '{', '}', '[', ']', '(', ')', '#', '+', '-', '.', '!', '|']
+    result = text
+    for char in chars_to_escape:
+        result = result.replace(char, f'\\{char}')
+    return result
+
+
 def strip_prompt_markers(text: str) -> str:
     lines = text.splitlines()
     clean = [l for l in lines if not l.strip().startswith(">>") and not l.startswith("[INFO]")]
@@ -1154,6 +1164,12 @@ Screen {
         await self.query_one("#chat-center").mount(VerticalScroll(id="chat"))
         self._mount_welcome_screen()
 
+    async def _clear_chat_only(self) -> None:
+        """Clear chat without showing welcome screen (for personality changes mid-conversation)"""
+        old_chat = self.query_one("#chat", VerticalScroll)
+        await old_chat.remove()
+        await self.query_one("#chat-center").mount(VerticalScroll(id="chat"))
+
     async def _stop_model_process(self) -> None:
         proc = self.proc
         pgid = self.proc_pgid
@@ -1267,7 +1283,10 @@ Screen {
                 self.proc.stdin.write(cmd.encode())
                 await self.proc.stdin.drain()
                 await self._read_until_prompt(timeout=5)
-            except Exception:
+                
+                # Small delay to let subprocess fully settle
+                await asyncio.sleep(0.1)
+            except Exception as e:
                 pass
         
         # Hide personality selector and show chat/input
@@ -1275,8 +1294,8 @@ Screen {
         self.query_one("#chat-center").display = True
         self.query_one("#input-center").display = True
         
-        # Clear UI the same way /clear does
-        await self._reset_chat_history()
+        # Clear chat WITHOUT welcome screen (just an empty chat for new conversation)
+        await self._clear_chat_only()
         self._set_busy(False)
         self.refresh_command_menu()
         self.query_one("#input").focus()
@@ -1508,10 +1527,11 @@ Screen {
                     else:
                         display = strip_prompt_markers(get_display_text(buf))
                         if display:
-                            await self.current_md.update(f"{display} ▌")
+                            await self.current_md.update(f"{escape_markdown(display)} ▌")
                 else:
                     display = strip_prompt_markers(buf)
-                    await self.current_md.update(f"{display} ▌")
+                    if display:  # Only update if there's actual content
+                        await self.current_md.update(f"{escape_markdown(display)} ▌")
 
                 last_update = now
 
@@ -1524,7 +1544,13 @@ Screen {
             display += "\n\n*— stopped*"
             self.interrupted = False
 
-        await self.current_md.update(display)
+        try:
+            await self.current_md.update(escape_markdown(display))
+        except Exception as e:
+            # Widget might have been removed, show error in chat
+            error_msg = f'<error: {e}>'
+            await self.current_md.update(error_msg)
+            return
         # Only scroll to bottom on completion if user is near bottom
         scroll_y = chat.scroll_offset.y
         virtual_h = chat.virtual_size.height
