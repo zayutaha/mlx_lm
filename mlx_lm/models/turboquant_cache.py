@@ -152,17 +152,25 @@ class TurboQuantKVCache:
             self._deq_offset = total
             return self._k_deq_buf[..., :total, :], self._v_deq_buf[..., :total, :]
 
-        # Full dequant (prefill)
-        all_k = self._full_dequant(self.k_packed, self.k_norms, self._k_q, k_dim, B, H, total, keys.dtype)
-        all_v = self._full_dequant(self.v_packed, self.v_norms, self._v_q, v_dim, B, H, total, values.dtype)
+        # Full dequant (prefill) — sequential K then V to halve peak memory.
+        # Without sequencing, all_k, all_v, k_deq_buf, v_deq_buf coexist (4x cache).
+        # By evaluating K before starting V, peak drops to 2x cache.
+        self._k_deq_buf = None
+        self._v_deq_buf = None
         alloc = ((total + self.step - 1) // self.step) * self.step
+        all_k = self._full_dequant(self.k_packed, self.k_norms, self._k_q, k_dim, B, H, total, keys.dtype)
         self._k_deq_buf = mx.zeros((B, H, alloc, k_dim), dtype=keys.dtype)
-        self._v_deq_buf = mx.zeros((B, H, alloc, v_dim), dtype=values.dtype)
         self._k_deq_buf[..., :total, :] = all_k
+        mx.eval(self._k_deq_buf)
+        mx.clear_cache()
+        all_v = self._full_dequant(self.v_packed, self.v_norms, self._v_q, v_dim, B, H, total, values.dtype)
+        self._v_deq_buf = mx.zeros((B, H, alloc, v_dim), dtype=values.dtype)
         self._v_deq_buf[..., :total, :] = all_v
+        mx.eval(self._v_deq_buf)
+        mx.clear_cache()
         self._deq_offset = total
         self._deq_alloc = alloc
-        return all_k, all_v
+        return self._k_deq_buf[..., :total, :], self._v_deq_buf[..., :total, :]
 
     def empty(self):
         return self.k_packed is None
