@@ -371,43 +371,37 @@ def get_model_capabilities(model_name: str) -> dict[str, bool]:
 
 def parse_latex(text: str) -> str:
     """Render LaTeX expressions ($...$ and $$...$$) to terminal Unicode."""
-    # Handle display math $$...$$ first (so $ signs inside aren't caught by inline)
-    def replace_display(m):
+    def replace(m):
         inner = m.group(1).strip()
         try:
-            return latex_parser.parse(inner)
+            result = latex_parser.parse(inner)
+            return result
         except Exception:
             return inner
 
-    def replace_inline(m):
-        inner = m.group(1).strip()
-        try:
-            return latex_parser.parse(inner)
-        except Exception:
-            return inner
-
-    # Do display math first ($$...$$)
-    text = re.sub(r'\$\$(.+?)\$\$', replace_display, text, flags=re.DOTALL)
-    # Then inline math ($...$)
-    text = re.sub(r'\$(.+?)\$', replace_inline, text)
+    # Display math $$...$$ first
+    text = re.sub(r'\$\$(.+?)\$\$', replace, text, flags=re.DOTALL)
+    # Then inline $...$
+    text = re.sub(r'\$(.+?)\$', replace, text)
     return text
 
 
 def escape_markdown(text: str) -> str:
-    """Escape markdown special characters by wrapping in backticks."""
-    # Escape special markdown characters
-    chars_to_escape = ['\\', '`', '*', '_', '{', '}', '[', ']', '(', ')', '#', '+', '-', '.', '!', '|']
-    result = text
-    for char in chars_to_escape:
-        result = result.replace(char, f'\\{char}')
-    return result
+    """Escape markdown special characters."""
+    chars = ['\\', '`', '*', '_', '{', '}', '[', ']', '(', ')', '#', '+', '-', '.', '!', '|']
+    for c in chars:
+        text = text.replace(c, f'\\{c}')
+    return text
 
 
 def format_for_display(text: str) -> str:
-    """Format model output for display: parse LaTeX then escape Markdown."""
+    """Format model output: parse LaTeX, escape Markdown."""
     if '$' in text:
         text = parse_latex(text)
-    return escape_markdown(text)
+    text = escape_markdown(text)
+    # Replace \n from \\ (row separator in LaTeX) with visible breaks
+    text = text.replace('\\n', '\n')
+    return text
 
 
 def strip_prompt_markers(text: str) -> str:
