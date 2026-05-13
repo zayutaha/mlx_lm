@@ -119,7 +119,6 @@ def chat(
     Returns:
         str: The generated response text.
     """
-    import mx
 
     if tokens is not None:
         if isinstance(tokens, list):
@@ -219,7 +218,6 @@ def stream_chat(
     Yields:
         GenerationResponse: The generated response with metadata.
     """
-    import mx
 
     if tokens is not None:
         if isinstance(tokens, list):
@@ -439,6 +437,8 @@ def main():
         turbo_fp16_layers=args.turbo_fp16_layers,
     )
 
+    message_history: list = []
+
     while True:
         if prompt is None:
             try:
@@ -455,6 +455,7 @@ def main():
                     turbo_kv_bits=args.turbo_kv_bits,
                     turbo_fp16_layers=args.turbo_fp16_layers,
                 )
+                message_history.clear()
                 continue
             if query == "/clear":
                 prompt_cache = make_prompt_cache(
@@ -463,6 +464,7 @@ def main():
                     turbo_kv_bits=args.turbo_kv_bits,
                     turbo_fp16_layers=args.turbo_fp16_layers,
                 )
+                message_history.clear()
                 rprint("[INFO] Conversation cleared.")
                 continue
             if query == "h":
@@ -473,14 +475,18 @@ def main():
                 personality_name = query[len("/personality_set "):].strip()
                 if personality_name in PERSONALITIES:
                     current_system_prompt = PERSONALITIES[personality_name]
+                    prompt_cache = make_prompt_cache(
+                        model,
+                        args.max_kv_size,
+                        turbo_kv_bits=args.turbo_kv_bits,
+                        turbo_fp16_layers=args.turbo_fp16_layers,
+                    )
+                    message_history.clear()
+                    rprint(f"[INFO] Personality set to '{personality_name}'.")
                 else:
                     available = ", ".join(PERSONALITIES.keys())
                     rprint(f"[ERROR] Unknown personality. Available: {available}")
                 continue
-            messages = []
-            if current_system_prompt is not None:
-                messages.append({"role": "system", "content": current_system_prompt})
-
             # Check for /think prefix to enable thinking for this message
             thinking_kwargs = dict(chat_template_kwargs)
             if query.startswith("/think"):
@@ -489,15 +495,32 @@ def main():
             else:
                 thinking_kwargs["enable_thinking"] = False
 
-            messages.append({"role": "user", "content": query})
+            # Multi-turn KV cache continuation:
+            # First turn — tokenize full conversation (system + user query).
+            # Subsequent turns — system prompt and prior conversation are
+            # already in the KV cache at correct RoPE positions. Only
+            # tokenize the new user message to eliminate redundant prefill
+            # of the full conversation history each turn.
+            is_first_turn = not message_history
+            if is_first_turn:
+                messages = []
+                if current_system_prompt is not None:
+                    messages.append({"role": "system", "content": current_system_prompt})
+                messages.append({"role": "user", "content": query})
+            else:
+                messages = [{"role": "user", "content": query}]
+
+            message_history.append({"role": "user", "content": query})
             prompt = tokenizer.apply_chat_template(
                 messages,
                 add_generation_prompt=True,
+                add_special_tokens=is_first_turn,
                 **thinking_kwargs,
             )
 
         last_response = None
         stop_generation = False
+        response_text = ""
         for response in stream_generate(
             model,
             tokenizer,
@@ -518,6 +541,7 @@ def main():
             turbo_fp16_layers=args.turbo_fp16_layers,
             mtp=args.mtp,
         ):
+            response_text += response.text
             rprint(response.text, flush=True, end="")
             last_response = response
             if sys.platform != "win32":
@@ -533,6 +557,7 @@ def main():
         if not stop_generation:
             rprint()
         if last_response and not stop_generation:
+            message_history.append({"role": "assistant", "content": response_text})
             rprint(
                 f"[INFO] Generated {last_response.generation_tokens} tokens "
                 f"at {last_response.generation_tps:.2f} tokens/sec "
