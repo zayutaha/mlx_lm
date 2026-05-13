@@ -188,26 +188,79 @@ class LatexParser:
 
     def _parse_environment(self, env_name):
         # Parse begin{env_name} ... end{env_name}
+        # Skip optional argument like {2} in \begin{alignat*}{2}
+        if self._peek() == '{':
+            self._advance()
+            while self.pos < len(self.text) and self._peek() != '}':
+                self._advance()
+            self._advance()
         end_tag = '\\end{' + env_name + '}'
         end_pos = self.text.find(end_tag, self.pos)
         if end_pos == -1:
-            content = self._parse_expr()
-        else:
-            content = self.text[self.pos:end_pos].strip()
-            self.pos = end_pos + len(end_tag)
-        return self._render_environment(env_name, content)
+            return self._parse_expr()
+        raw = self.text[self.pos:end_pos].strip()
+        self.pos = end_pos + len(end_tag)
+        # Clean hline and split into rows on \\ (double backslash)
+        raw = raw.replace('\\hline', '')
+        raw_rows = [r.strip() for r in raw.split('\\\\')]
+        # Choose separator: alignments get just spaces, others get visible | 
+        is_align = env_name in ('aligned', 'align', 'align*', 'alignat',
+                                'alignat*', 'flalign', 'flalign*')
+        sep = ' ' if is_align else (' | ' if env_name != 'cases' else ' ')
+        parsed_rows = []
+        for row in raw_rows:
+            row = row.replace('&', sep)
+            saved = self.pos, self.text
+            self.text = row
+            self.pos = 0
+            parsed = self._parse_expr()
+            self.pos, self.text = saved
+            parsed_rows.append(parsed)
+        return self._render_environment(env_name, parsed_rows)
 
-    def _render_environment(self, env_name, content):
-        """Render environment content as readable text."""
-        # Split on \\ (row separator)
-        rows = self._split_rows(content)
-        if env_name in ('matrix', 'pmatrix', 'bmatrix', 'vmatrix', 'Vmatrix'):
-            return self._render_matrix(rows, env_name)
-        elif env_name == 'cases':
-            return self._render_cases(rows)
-        elif env_name == 'aligned':
-            return self._render_aligned(rows)
-        return content
+    def _render_environment(self, env_name, parsed_rows):
+        """Render parsed environment rows as readable text.
+        
+        Args:
+            env_name: environment name (matrix, pmatrix, cases, etc.)
+            parsed_rows: list of strings, each a row with LaTeX already resolved.
+                         Cell separators are ' | '.
+        """
+        base_envs = ('matrix', 'pmatrix', 'bmatrix', 'vmatrix', 'Vmatrix', 'array')
+        if env_name in base_envs:
+            parts = []
+            for row in parsed_rows:
+                cells = [c.strip() for c in row.split(' | ') if c.strip()]
+                parts.append('  '.join(cells))
+            delim = {'pmatrix': '()', 'bmatrix': '[]', 'vmatrix': '||',
+                     'Vmatrix': '‖‖', 'matrix': '[]', 'array': '()'}
+            l, r = delim.get(env_name, ('[', ']'))
+            return l + ' | '.join(parts) + r
+
+        if env_name == 'cases':
+            parts = []
+            for row in parsed_rows:
+                cells = [c.strip() for c in row.split(' | ') if c.strip()]
+                if len(cells) >= 2:
+                    r_cond = cells[1]
+                    if r_cond.startswith('if '):
+                        r_cond = r_cond[3:].lstrip()
+                    parts.append(f'{cells[0]}  if {r_cond}')
+                else:
+                    parts.append(cells[0])
+            return '{ ' + ', '.join(parts) + ' ]'
+
+        if env_name in ('aligned', 'align', 'align*', 'alignat', 'alignat*',
+                        'flalign', 'flalign*'):
+            return self._render_aligned(parsed_rows)
+
+        if env_name == 'gather':
+            return '  '.join(parsed_rows) if len(parsed_rows) <= 2 else '\n'.join(f'  {r}' for r in parsed_rows)
+
+        if env_name == 'multline':
+            return '\n'.join(f'  {r}' for r in parsed_rows)
+
+        return '  '.join(parsed_rows)
 
     def _split_rows(self, content):
         """Split environment content into rows on \\\\."""
@@ -257,18 +310,23 @@ class LatexParser:
         return result
 
     def _render_cases(self, rows):
-        """Render cases environment."""
+        """Render cases environment.
+        
+        Receives pre-parsed rows: expression and condition are
+        separated by multiple spaces (from & replacement).
+        """
         parts = []
         for row in rows:
-            if '&' in row:
-                expr, cond = row.split('&', 1)
-                r_expr = self._render_cell(expr.strip())
-                r_cond = self._render_cell(cond.strip())
+            # Find first run of 2+ spaces as separator between expr and cond
+            import re
+            cells = re.split(r'  +', row.strip(), maxsplit=1)
+            if len(cells) >= 2:
+                r_expr, r_cond = cells[0], cells[1]
                 if r_cond.startswith('if '):
                     r_cond = r_cond[3:].lstrip()
                 parts.append(f'{r_expr}  if {r_cond}')
             else:
-                parts.append(self._render_cell(row.strip()))
+                parts.append(row.strip())
         return '{ ' + ', '.join(parts) + ' ]'
 
     def _render_aligned(self, rows):
@@ -299,10 +357,13 @@ class LatexParser:
             self._advance()
 
         if not cmd:
-            # Special character: \, \#, etc.
+            # Non-alpha command: \, \:, \;, \!, \#, \$, \%, \&, \_, \{, \}
             char = self._peek(1) if self.pos < len(self.text) else ''
             if char:
                 self._advance()
+            # Spacing commands
+            if char in (',', ':', ';', '!'):
+                return ' '
             return char or ''
 
         # === Greek letters ===
