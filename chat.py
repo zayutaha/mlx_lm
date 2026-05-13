@@ -1294,8 +1294,8 @@ Screen {
         self.query_one("#chat-center").display = True
         self.query_one("#input-center").display = True
         
-        # Clear chat WITHOUT welcome screen (just an empty chat for new conversation)
-        await self._clear_chat_only()
+        # Show welcome screen (Kaplumba logo) for new conversation
+        await self._reset_chat_history()
         self._set_busy(False)
         self.refresh_command_menu()
         self.query_one("#input").focus()
@@ -1332,9 +1332,17 @@ Screen {
 
         chat = self.query_one("#chat", VerticalScroll)
 
-        # If /clear command, clear the chat display
+        # If /clear command, clear the chat display AND reset subprocess state
         if user_text == "/clear":
             await self._reset_chat_history()
+            # Also tell subprocess to clear its KV cache and message history
+            if self.proc and self.proc.returncode is None:
+                try:
+                    self.proc.stdin.write(b"/clear\n")
+                    await self.proc.stdin.drain()
+                    await self._read_until_prompt(timeout=5)
+                except Exception:
+                    pass
             self._set_busy(False)
             self.refresh_command_menu()
             self.query_one("#input").focus()
