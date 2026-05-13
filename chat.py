@@ -389,19 +389,40 @@ def get_model_capabilities(model_name: str) -> dict[str, bool]:
 
 
 def parse_latex(text: str) -> str:
-    """Render LaTeX expressions ($...$ and $$...$$) to terminal Unicode."""
-    def replace(m):
-        inner = m.group(1).strip()
+    """Render LaTeX expressions to terminal Unicode.
+    
+    Handles:
+    - ```latex ... ``` code blocks (parse the full LaTeX inside)
+    - $$...$$ display math
+    - $...$ inline math
+    """
+    def _parse(inner):
         try:
-            result = latex_parser.parse(inner)
-            return result
+            return latex_parser.parse(inner)
         except Exception:
             return inner
 
-    # Display math $$...$$ first
-    text = re.sub(r'\$\$(.+?)\$\$', replace, text, flags=re.DOTALL)
-    # Then inline $...$
-    text = re.sub(r'\$(.+?)\$', replace, text)
+    # Step 1: ```latex ... ``` blocks — render LaTeX as inline text
+    text = re.sub(
+        r'```latex\s*\n(.+?)```',
+        lambda m: _parse(m.group(1).strip()),
+        text,
+        flags=re.DOTALL,
+    )
+    # Also handle ```latex ... ``` on single line
+    text = re.sub(
+        r'```latex\s*(.+?)```',
+        lambda m: _parse(m.group(1).strip()),
+        text,
+    )
+
+    # Step 2: Display math \[ ... \] and $$...$$
+    text = re.sub(r'\\\[(.+?)\\\]', lambda m: _parse(m.group(1)), text, flags=re.DOTALL)
+    text = re.sub(r'\$\$(.+?)\$\$', lambda m: _parse(m.group(1)), text, flags=re.DOTALL)
+
+    # Step 3: Inline $...$
+    text = re.sub(r'\$(.+?)\$', lambda m: _parse(m.group(1)), text)
+
     return text
 
 
@@ -415,11 +436,11 @@ def escape_markdown(text: str) -> str:
 
 def format_for_display(text: str) -> str:
     """Format model output: parse LaTeX, escape Markdown."""
-    if '$' in text:
+    if '$' in text or '```' in text or '\\[' in text:
         text = parse_latex(text)
     text = escape_markdown(text)
-    # Replace \n from \\ (row separator in LaTeX) with visible breaks
-    text = text.replace('\\n', '\n')
+    # Single newlines → double for visible Markdown line breaks
+    text = re.sub(r'(?<!\n)\n(?!\n)', '\n\n', text)
     return text
 
 
