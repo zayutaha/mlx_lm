@@ -18,6 +18,7 @@ import signal
 import subprocess
 from pathlib import Path
 from latex_parser import parser as latex_parser
+from simple_markdown import render as render_markdown
 from textual.app import App, ComposeResult
 from textual.widgets import Markdown, TextArea, Static, Button
 from textual.containers import VerticalScroll, Vertical, Horizontal, Center, Middle
@@ -392,13 +393,15 @@ def get_model_capabilities(model_name: str) -> dict[str, bool]:
 def parse_latex(text: str) -> str:
     """Render LaTeX expressions to terminal Unicode.
     
-    Handles:
-    - ```latex ... ``` code blocks (parse the full LaTeX inside)
-    - \\begin{...}...\\end{...} environments (outside math mode too)
-    - $$...$$ display math
-    - $...$ inline math
-    - Inline \\command{...} formatting commands
+    Order matters: math delimiters first (so environments inside
+    $$...$$ get parsed by the LaTeX parser in one pass), then
+    remaining standalone environments and inline commands.
     """
+    # re.escape('\\') for matching literal backslash in Python 3.13+
+    _BS = re.escape('\\')
+    _LBRACE = '{'
+    _RBRACE = '}'
+
     def _parse(inner):
         try:
             return latex_parser.parse(inner)
@@ -406,37 +409,15 @@ def parse_latex(text: str) -> str:
             return inner
 
     def _parse_block(m):
-        """Parse a LaTeX block, returning content with env syntax resolved."""
         return _parse(m.group(0))
 
-    # Step 0: \\begin{...}...\\end{...} environments — process whole blocks
-    text = re.sub(
-        r'[\\]begin[{]([\w*]+)[}].*?[\\]end[{]\1[}]',
-        _parse_block,
-        text,
-        flags=re.DOTALL,
-    )
-
-    # Step 0b: standalone \command{...} patterns outside math
-    text = re.sub(
-        r'[\\](?:textcolor|color)[{][^}]*[}][{][^}]*[}]',
-        _parse_block,
-        text,
-    )
-    text = re.sub(
-        r'[\\](?:textbf|textit|texttt|mathrm|mathbf|mathit|mathsf|mathtt|mathcal|mathbb|mathfrak|section|subsection|subsubsection|paragraph|huge|Huge|LARGE|Large|large|normalsize|small|footnotesize|scriptsize|tiny|underline|uline|sout|cancel|emph|text|boxed)[{][^}]*[}]',
-        _parse_block,
-        text,
-    )
-
-    # Step 1: ```latex ... ``` blocks — render LaTeX as inline text
+    # Step 1: ```latex ... ``` code blocks
     text = re.sub(
         r'```latex\s*\n(.+?)```',
         lambda m: _parse(m.group(1).strip()),
         text,
         flags=re.DOTALL,
     )
-    # Also handle ```latex ... ``` on single line
     text = re.sub(
         r'```latex\s*(.+?)```',
         lambda m: _parse(m.group(1).strip()),
@@ -444,21 +425,57 @@ def parse_latex(text: str) -> str:
     )
 
     # Step 2: Display math \[ ... \] and $$...$$
-    text = re.sub(r'[\\][[](.*?)[\\][\]]', lambda m: _parse(m.group(1)), text, flags=re.DOTALL)
-    text = re.sub(r'[\$]{2}(.+?)[\$]{2}', lambda m: _parse(m.group(1)), text, flags=re.DOTALL)
+    text = re.sub(
+        _BS + r'\[(.*?)' + _BS + r'\]',
+        lambda m: _parse(m.group(1)),
+        text,
+        flags=re.DOTALL,
+    )
+    text = re.sub(
+        r'\$\$(.+?)\$\$',
+        lambda m: _parse(m.group(1)),
+        text,
+        flags=re.DOTALL,
+    )
 
     # Step 3: Inline $...$
-    text = re.sub(r'[\$](.+?)[\$]', lambda m: _parse(m.group(1)), text)
+    text = re.sub(r'\$(.+?)\$', lambda m: _parse(m.group(1)), text)
+
+    # Step 4: Standalone \begin{...}...\end{...} environments (outside math)
+    text = re.sub(
+        _BS + r'begin' + _LBRACE + r'([\w*]+)' + _RBRACE
+        + r'.*?'
+        + _BS + r'end' + _LBRACE + r'\1' + _RBRACE,
+        _parse_block,
+        text,
+        flags=re.DOTALL,
+    )
+
+    # Step 5: Standalone \command{...} patterns
+    _CMDS = (
+        r'(?:textcolor|color)' + _LBRACE + r'[^}]*' + _RBRACE
+        + _LBRACE + r'[^}]*' + _RBRACE
+    )
+    text = re.sub(_BS + _CMDS, _parse_block, text)
+
+    _CMDS2 = (
+        r'(?:textbf|textit|texttt|mathrm|mathbf|mathit|mathsf|mathtt'
+        r'|mathcal|mathbb|mathfrak|section|subsection|subsubsection'
+        r'|paragraph|huge|Huge|LARGE|Large|large|normalsize|small'
+        r'|footnotesize|scriptsize|tiny|underline|uline|sout|cancel'
+        r'|emph|text|boxed)'
+        + _LBRACE + r'[^}]*' + _RBRACE
+    )
+    text = re.sub(_BS + _CMDS2, _parse_block, text)
 
     return text
 
 
 
 def format_for_display(text: str) -> str:
-    """Format model output: parse LaTeX, preserve markdown for Textual."""
+    """Format model output: parse LaTeX, render markdown → Rich markup."""
     text = parse_latex(text)
-    # Single newlines → double for visible Markdown line breaks
-    text = re.sub(r'(?<!\n)\n(?!\n)', '\n\n', text)
+    text = render_markdown(text)
     return text
 
 
@@ -1447,7 +1464,7 @@ Screen {
 
         await chat.mount(Markdown(user_text, classes="bubble-user"))
 
-        self.current_md = Markdown("▌", classes="bubble-assistant")
+        self.current_md = Static("▌", classes="bubble-assistant")
         await chat.mount(self.current_md)
         chat.scroll_end(animate=False)
 
