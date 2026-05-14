@@ -18,8 +18,12 @@ class LatexParser:
     }
 
     SUPERSCRIPT = str.maketrans(
-        '0123456789abcdefghijklmnoprstuvwxyzABDEGHIJKLMNOPRTUW',
-        '⁰¹²³⁴⁵⁶⁷⁸⁹ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻᴬᴮᴰᴱᴳᴴᴵᴶᴷᴸᴹᴺᴼᴾᴿᵀᵁᵂ',
+        '0123456789abcdefghijklmnoprstuvwxyzABDEGHIJKLMNOPRTUW+-',
+        '⁰¹²³⁴⁵⁶⁷⁸⁹ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻᴬᴮᴰᴱᴳᴴᴵᴶᴷᴸᴹᴺᴼᴾᴿᵀᵁᵂ⁺⁻',
+    )
+    SUBSCRIPT = str.maketrans(
+        '0123456789aehijklmnoprstuvx+-',
+        '₀₁₂₃₄₅₆₇₈₉ₐₑₕᵢⱼₖₗₘₙₒₚᵣₛₜᵤᵥₓ₊₋',
     )
     SUBSCRIPT = str.maketrans(
         '0123456789aehijklmnoprstuvx',
@@ -226,7 +230,8 @@ class LatexParser:
         sep = ' ' if is_align else (' | ' if env_name != 'cases' else ' ')
         parsed_rows = []
         for row in raw_rows:
-            row = row.replace('&', sep)
+            if not is_align:
+                row = row.replace('&', sep)
             saved = self.pos, self.text
             self.text = row
             self.pos = 0
@@ -381,6 +386,9 @@ class LatexParser:
             # Spacing commands
             if char in (',', ':', ';', '!'):
                 return ' '
+            # \| = double vertical bar (norms)
+            if char == '|':
+                return '‖'
             return char or ''
 
         # === Greek letters ===

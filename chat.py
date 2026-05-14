@@ -411,7 +411,7 @@ def parse_latex(text: str) -> str:
 
     # Step 0: \\begin{...}...\\end{...} environments — process whole blocks
     text = re.sub(
-        r'[\\]begin[{](\w+)[}].*?[\\]end[{]\1[}]',
+        r'[\\]begin[{]([\w*]+)[}].*?[\\]end[{]\1[}]',
         _parse_block,
         text,
         flags=re.DOTALL,
