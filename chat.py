@@ -134,7 +134,8 @@ $\\textbf{{Behavior:}}$
 - Have an opinion when the evidence supports one. Do not hide behind fake neutrality.
 - Explain what mattered, who had leverage, and what the downstream consequences were.
 - Call bad strategy, propaganda, or delusion what it was when warranted.
-- Swear a bit more freely than default when emphasis helps, but keep the analysis sharp.""",
+- Swear a bit more freely than default when emphasis helps, but keep the analysis sharp.
+- Use markdown for formatting (## headings, **bold**, lists, ```code```, etc.).""",
 }
 
 SLASH_COMMANDS: dict[str, str] = {
@@ -156,6 +157,7 @@ DEFAULT_MODEL_OPTIONS = {
     "mtp": True,
 }
 OPTIONS_STATE_PATH = Path.home() / ".omlx" / "chat_options.json"
+MODEL_CONFIGS_PATH = Path.home() / ".omlx" / "model_configs.json"
 
 GIB = 1024 ** 3
 MEMORY_SAFETY_MARGIN_BYTES = int(1.5 * GIB)
@@ -164,25 +166,25 @@ OPTION_SPECS = [
     {
         "key": "temp",
         "label": "Temperature",
-        "choices": [0.0, 0.3, 0.7, 1.0, 1.3],
+        "choices": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3],
         "description": "Lower is tighter. Higher is weirder.",
     },
     {
         "key": "top_p",
         "label": "Top-p",
-        "choices": [0.5, 0.7, 0.8, 0.9, 1.0],
+        "choices": [0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
         "description": "Nucleus sampling cutoff.",
     },
     {
         "key": "top_k",
         "label": "Top-k",
-        "choices": [0, 20, 40, 80, 120, 200],
+        "choices": [0, 20, 40, 60, 80, 100, 120, 200],
         "description": "0 disables it. Higher keeps more candidates.",
     },
     {
         "key": "max_tokens",
         "label": "Max tokens",
-        "choices": [512, 1024, 2048, 4096, 8192, 16384],
+        "choices": [512, 1024, 2048, 4096, 8192, 16384, 32768],
         "description": "Response length cap.",
     },
     {
@@ -200,7 +202,7 @@ OPTION_SPECS = [
     {
         "key": "turbo_kv_bits",
         "label": "Turbo KV bits",
-        "choices": [None, 1, 2, 3, 4],
+        "choices": [None, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0],
         "description": "KV compression. Less RAM, more compromise.",
     },
     {
@@ -245,6 +247,21 @@ def save_model_options(options: dict[str, object]) -> None:
     OPTIONS_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(OPTIONS_STATE_PATH, "w") as f:
         json.dump(normalize_model_options(options), f, indent=2, sort_keys=True)
+
+
+def load_model_configs() -> dict:
+    """Load per-model configs (options + personality overrides)."""
+    try:
+        if MODEL_CONFIGS_PATH.exists():
+            return json.loads(MODEL_CONFIGS_PATH.read_text())
+    except Exception:
+        pass
+    return {}
+
+
+def save_model_configs(configs: dict) -> None:
+    MODEL_CONFIGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    MODEL_CONFIGS_PATH.write_text(json.dumps(configs, indent=2, sort_keys=True))
 
 
 def get_model_size_bytes(model_name: str) -> int:
@@ -502,20 +519,48 @@ class LoadingSpinner(Static):
 
 
 class ModelSelector(Static):
-    """Model selection widget."""
+    """Model selection widget with favorite/pin support."""
 
     can_focus = True
+    FAVORITES_FILE = Path.home() / ".omlx" / "favorites.json"
 
     def __init__(self, models: list[tuple[str, str, dict]], **kwargs):
         super().__init__(**kwargs)
         self.models = models
         self.selected_index = 0
+        self.favorites: set[str] = self._load_favorites()
         self.render_list()
+
+    def _load_favorites(self) -> set[str]:
+        try:
+            if self.FAVORITES_FILE.exists():
+                data = json.loads(self.FAVORITES_FILE.read_text())
+                return set(data.get("favorites", []))
+        except Exception:
+            pass
+        return set()
+
+    def _save_favorites(self):
+        try:
+            self.FAVORITES_FILE.parent.mkdir(parents=True, exist_ok=True)
+            self.FAVORITES_FILE.write_text(
+                json.dumps({"favorites": list(self.favorites)}, indent=2)
+            )
+        except Exception:
+            pass
+
+    def _sorted_models(self):
+        """Return models with favorites first, then by size."""
+        fav = [m for m in self.models if m[0] in self.favorites]
+        rest = [m for m in self.models if m[0] not in self.favorites]
+        return fav + rest
 
     def render_list(self):
         """Render the model list with selection indicator."""
+        sorted_models = self._sorted_models()
         lines = ["[bold #f0a500]Select a model:[/bold #f0a500]\n"]
-        for i, (model_name, size, caps) in enumerate(self.models):
+        for i, (model_name, size, caps) in enumerate(sorted_models):
+            prefix = "* " if model_name in self.favorites else "  "
             caps_str = []
             if caps["vision"]:
                 caps_str.append("👁 Vision")
@@ -530,19 +575,19 @@ class ModelSelector(Static):
             disabled = not caps.get("fits_memory", True)
             
             if i == self.selected_index and not disabled:
-                lines.append(f"[bold #f0a500]❯ {model_name}[/bold #f0a500]")
+                lines.append(f"[bold #f0a500]❯ {prefix}{model_name}[/bold #f0a500]")
                 lines.append(f"  [dim]{size} | {caps_display} | {fit_text}[/dim]")
             elif i == self.selected_index and disabled:
-                lines.append(f"[bold #cc6666]❯ {model_name}[/bold #cc6666]")
+                lines.append(f"[bold #cc6666]❯ {prefix}{model_name}[/bold #cc6666]")
                 lines.append(f"  [#cc6666]{size} | {caps_display} | {fit_text}[/#cc6666]")
             elif disabled:
-                lines.append(f"  [#886666]{model_name}[/#886666]")
+                lines.append(f"  {prefix}{model_name}")
                 lines.append(f"  [#886666]{size} | {caps_display} | {fit_text}[/#886666]")
             else:
-                lines.append(f"  {model_name}")
+                lines.append(f"  {prefix}{model_name}")
                 lines.append(f"  [dim]{size} | {caps_display} | {fit_text}[/dim]")
         
-        lines.append("\n[dim](↑/↓ navigate, Enter select, red entries are risky, Esc back, Ctrl+C quit)[/dim]")
+        lines.append("\n[dim](↑/↓ navigate, Enter select, f favorite, e edit config, red entries are risky, Esc back, Ctrl+C quit)[/dim]")
         self.update("\n".join(lines))
 
     async def on_key(self, event: Key) -> None:
@@ -557,14 +602,133 @@ class ModelSelector(Static):
             self.render_list()
         elif event.key == "enter":
             event.prevent_default()
-            selected_model = self.models[self.selected_index][0]  # Get model name from tuple
+            selected_model = self._sorted_models()[self.selected_index][0]
             await self.app.action_model_selected(selected_model)
+        elif event.key == "f":
+            event.prevent_default()
+            model_name = self._sorted_models()[self.selected_index][0]
+            if model_name in self.favorites:
+                self.favorites.discard(model_name)
+            else:
+                self.favorites.add(model_name)
+            self._save_favorites()
+            self.render_list()
+        elif event.key == "e":
+            event.prevent_default()
+            model_name = self._sorted_models()[self.selected_index][0]
+            await self.app.action_model_edit(model_name)
         elif event.key == "escape":
             event.prevent_default()
             await self.app.action_dismiss_model_selector()
         elif event.key == "ctrl+c":
             event.prevent_default()
             self.app.exit()
+
+
+class ModelConfigEditor(Static):
+    """Per-model config editor: options + personality."""
+
+    can_focus = True
+
+    def __init__(self, model_name: str, config: dict, **kwargs):
+        super().__init__(**kwargs)
+        self.model_name = model_name
+        self.options = dict(config.get("options", {}))
+        self.personality = config.get("personality", "default")
+        self.selected_index = 0
+        self._items = self._build_items()
+        self.render_list()
+
+    def _build_items(self) -> list[dict]:
+        items = []
+        for spec in OPTION_SPECS:
+            items.append({
+                "type": "option",
+                "key": spec["key"],
+                "label": spec["label"],
+                "choices": spec["choices"],
+                "description": spec["description"],
+                "value": self.options.get(spec["key"]),
+            })
+        items.append({
+            "type": "personality",
+            "key": "personality",
+            "label": "Default personality",
+            "choices": ["default", "doctor", "historian"],
+            "description": "Personality applied when this model is loaded.",
+            "value": self.personality,
+        })
+        return items
+
+    def _format_value(self, value: object) -> str:
+        if value is None:
+            return "Auto"
+        if value is True:
+            return "On"
+        if value is False:
+            return "Off"
+        return str(value)
+
+    def render_list(self):
+        lines = [f"[bold #f0a500]Config: {self.model_name}[/bold #f0a500]\n"]
+        for idx, item in enumerate(self._items):
+            label = item["label"]
+            value = self._format_value(item["value"])
+            desc = item["description"]
+            if idx == self.selected_index:
+                lines.append(f"[bold #f0a500]❯ {label}: {value}[/bold #f0a500]")
+            else:
+                lines.append(f"  {label}: {value}")
+            lines.append(f"  [dim]{desc}[/dim]")
+        lines.append("\n[dim](↑/↓ navigate, ←/→ change, Esc close)[/dim]")
+        self.update("\n".join(lines))
+
+    def change_value(self, direction: int):
+        item = self._items[self.selected_index]
+        choices = item["choices"]
+        current = item["value"]
+        try:
+            idx = choices.index(current)
+        except ValueError:
+            idx = 0
+        idx = (idx + direction) % len(choices)
+        item["value"] = choices[idx]
+        self.render_list()
+
+    async def on_key(self, event: Key):
+        if event.key == "up":
+            event.prevent_default()
+            self.selected_index = (self.selected_index - 1) % len(self._items)
+            self.render_list()
+        elif event.key == "down":
+            event.prevent_default()
+            self.selected_index = (self.selected_index + 1) % len(self._items)
+            self.render_list()
+        elif event.key == "left":
+            event.prevent_default()
+            self.change_value(-1)
+        elif event.key == "right":
+            event.prevent_default()
+            self.change_value(1)
+        elif event.key == "escape":
+            event.prevent_default()
+            await self.app.action_model_editor_save(self._collect())
+        elif event.key == "ctrl+c":
+            event.prevent_default()
+            self.app.exit()
+
+    def _collect(self) -> dict:
+        options = {}
+        personality = "default"
+        for item in self._items:
+            if item["type"] == "option":
+                options[item["key"]] = item["value"]
+            elif item["type"] == "personality":
+                personality = item["value"]
+        return {
+            "options": normalize_model_options(options),
+            "personality": personality,
+        }
 
 
 class PersonalitySelector(Static):
@@ -1004,13 +1168,30 @@ Screen {
 }
 
 #options-selector {
-    width: 84;
+    width: 60;
     height: auto;
-    max-height: 28;
+    max-height: 30;
     background: #1a1a1a;
     border: round #f0a500;
     padding: 2;
+    color: #d8d8d8;
+}
+
+#model-editor-container {
+    layout: vertical;
+    width: 100%;
+    height: 100%;
     align: center middle;
+    display: none;
+}
+
+#model-editor {
+    width: 70;
+    height: auto;
+    max-height: 35;
+    background: #1a1a1a;
+    border: round #f0a500;
+    padding: 2;
     color: #d8d8d8;
 }
 
@@ -1048,6 +1229,9 @@ Screen {
 
         with Center(id="options-selector-container"):
             yield OptionsSelector(DEFAULT_MODEL_OPTIONS, id="options-selector")
+
+        with Center(id="model-editor-container"):
+            yield ModelConfigEditor("", {}, id="model-editor")
 
         with Center(id="splash-container"):
             yield Static(LOGO, id="splash-logo")
@@ -1093,25 +1277,33 @@ Screen {
         self.query_one("#model-selector").focus()
 
     def _build_model_command(self, model_path: str) -> list[str]:
+        # Merge per-model config overrides
+        opts = dict(self.model_options)
+        model_name = Path(model_path).name
+        configs = load_model_configs()
+        model_cfg = configs.get(model_name, {})
+        if model_cfg.get("options"):
+            opts.update(model_cfg["options"])
+
         cmd = [
             "uv", "run", "python", "-m", "mlx_lm.chat",
             "--model", model_path,
             "--prompt-marker", TUI_PROMPT_MARKER,
-            "--temp", str(self.model_options["temp"]),
-            "--top-p", str(self.model_options["top_p"]),
-            "--top-k", str(self.model_options["top_k"]),
-            "--max-tokens", str(self.model_options["max_tokens"]),
+            "--temp", str(opts["temp"]),
+            "--top-p", str(opts["top_p"]),
+            "--top-k", str(opts["top_k"]),
+            "--max-tokens", str(opts["max_tokens"]),
             "--chat-template-args", '{"enable_thinking":false}',
             "--system-prompt", self.current_system_prompt,
         ]
-        if self.model_options["mtp"]:
+        if opts["mtp"]:
             cmd.append("--mtp")
-        if self.model_options["max_kv_size"] is not None:
-            cmd.extend(["--max-kv-size", str(self.model_options["max_kv_size"])])
-        if self.model_options["turbo_kv_bits"] is not None:
-            cmd.extend(["--turbo-kv-bits", str(self.model_options["turbo_kv_bits"])])
-        if self.model_options["turbo_fp16_layers"] is not None:
-            cmd.extend(["--turbo-fp16-layers", str(self.model_options["turbo_fp16_layers"])])
+        if opts["max_kv_size"] is not None:
+            cmd.extend(["--max-kv-size", str(opts["max_kv_size"])])
+        if opts["turbo_kv_bits"] is not None:
+            cmd.extend(["--turbo-kv-bits", str(opts["turbo_kv_bits"])])
+        if opts["turbo_fp16_layers"] is not None:
+            cmd.extend(["--turbo-fp16-layers", str(opts["turbo_fp16_layers"])])
         return cmd
 
     async def initialize_model(self):
@@ -1299,6 +1491,10 @@ Screen {
     async def action_model_selected(self, model_name: str):
         """Handle model selection from the selector screen."""
         self.selected_model = model_name
+        # Load per-model personality
+        configs = load_model_configs()
+        model_cfg = configs.get(model_name, {})
+        self.selected_personality = model_cfg.get("personality", "default")
         self.query_one("#model-selector-container").display = False
         self._show_loading_ui(f"Loading {model_name}...")
 
@@ -1365,6 +1561,30 @@ Screen {
         selector = self.query_one("#options-selector", OptionsSelector)
         selector.set_options(self.model_options)
         selector.focus()
+
+    async def action_model_edit(self, model_name: str):
+        configs = load_model_configs()
+        config = configs.get(model_name, {})
+        editor = self.query_one("#model-editor", ModelConfigEditor)
+        editor.model_name = model_name
+        editor.options = dict(config.get("options", {}))
+        editor.personality = config.get("personality", "default")
+        editor._items = editor._build_items()
+        editor.selected_index = 0
+        editor.render_list()
+        self.query_one("#model-selector-container").display = False
+        self.query_one("#model-editor-container").display = True
+        editor.focus()
+
+    async def action_model_editor_save(self, config: dict):
+        editor = self.query_one("#model-editor", ModelConfigEditor)
+        model_name = editor.model_name
+        configs = load_model_configs()
+        configs[model_name] = config
+        save_model_configs(configs)
+        self.query_one("#model-editor-container").display = False
+        self.query_one("#model-selector-container").display = True
+        self.query_one("#model-selector").focus()
 
     async def action_personality_selected(self, personality_name: str):
         self.selected_personality = personality_name
