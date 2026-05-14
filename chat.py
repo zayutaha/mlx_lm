@@ -43,7 +43,18 @@ ENGAGEMENT RULES
 
 Directness: Eliminate introductory phrases like "As an AI" or "It is important to remember" and concluding summaries that restate what has already been said.
 
-Nuance over Certainty: Acknowledge complexity where it exists without using clichés. If a topic is hard or lacks a clear answer, describe the tension of the subject matter rather than defaulting to a neutral middle-ground."""
+Nuance over Certainty: Acknowledge complexity where it exists without using clichés. If a topic is hard or lacks a clear answer, describe the tension of the subject matter rather than defaulting to a neutral middle-ground.
+
+FORMATTING:
+- Use ## for headings, ### for subheadings.
+- Use **bold** for emphasis, *italic* for mild emphasis.
+- Use - for bullet lists, 1. for numbered lists.
+- Use ```language\ncode\n``` for code blocks.
+- Use `inline code` for inline code references.
+- Use | table | syntax for tables.
+- Use > for blockquotes.
+- Use $...$ for inline math and $$...$$ for display math.
+- Do NOT use \\textbf, \\textit, \\textcolor, \\section, \\begin{align} — use markdown equivalents instead. LaTeX is only for math expressions, not for text formatting."""
 
 MODEL_PATH = os.getenv("MLX_MODEL", "/Users/zayaantaha/.omlx/models/SSHVL")
 
@@ -89,7 +100,16 @@ No AI Disclaimers: Never say "as an AI", "I am an AI", or anything similar.
 
 No Filler: Do not pad with obvious caveats, softeners, or generic safety boilerplate. If something is uncertain, say what is uncertain and move on.
 
-Language: Casual profanity is allowed when it fits the tone. Avoid sounding sanitized."""
+Language: Casual profanity is allowed when it fits the tone. Avoid sounding sanitized.
+
+FORMATTING:
+- Use ## for headings, ### for subheadings.
+- Use **bold** for emphasis, *italic* for mild emphasis.
+- Use - for bullet lists, 1. for numbered lists.
+- Use ```language\ncode\n``` for code blocks, `inline code` for inline references.
+- Use | table | syntax for tables.
+- Use $...$ for inline math and $$...$$ for display math.
+- Do NOT use \\textbf, \\textit, \\textcolor, \\section, \\begin{align} — use markdown equivalents instead. LaTeX is only for math expressions, not for text formatting."""
 
 PERSONALITIES: dict[str, str] = {
     "default": f"""{BASE_STYLE_PROMPT}
@@ -374,14 +394,40 @@ def parse_latex(text: str) -> str:
     
     Handles:
     - ```latex ... ``` code blocks (parse the full LaTeX inside)
+    - \\begin{...}...\\end{...} environments (outside math mode too)
     - $$...$$ display math
     - $...$ inline math
+    - Inline \\command{...} formatting commands
     """
     def _parse(inner):
         try:
             return latex_parser.parse(inner)
         except Exception:
             return inner
+
+    def _parse_block(m):
+        """Parse a LaTeX block, returning content with env syntax resolved."""
+        return _parse(m.group(0))
+
+    # Step 0: \\begin{...}...\\end{...} environments — process whole blocks
+    text = re.sub(
+        r'[\\]begin[{](\w+)[}].*?[\\]end[{]\1[}]',
+        _parse_block,
+        text,
+        flags=re.DOTALL,
+    )
+
+    # Step 0b: standalone \command{...} patterns outside math
+    text = re.sub(
+        r'[\\](?:textcolor|color)[{][^}]*[}][{][^}]*[}]',
+        _parse_block,
+        text,
+    )
+    text = re.sub(
+        r'[\\](?:textbf|textit|texttt|mathrm|mathbf|mathit|mathsf|mathtt|mathcal|mathbb|mathfrak|section|subsection|subsubsection|paragraph|huge|Huge|LARGE|Large|large|normalsize|small|footnotesize|scriptsize|tiny|underline|uline|sout|cancel|emph|text|boxed)[{][^}]*[}]',
+        _parse_block,
+        text,
+    )
 
     # Step 1: ```latex ... ``` blocks — render LaTeX as inline text
     text = re.sub(
@@ -398,28 +444,19 @@ def parse_latex(text: str) -> str:
     )
 
     # Step 2: Display math \[ ... \] and $$...$$
-    text = re.sub(r'\\\[(.+?)\\\]', lambda m: _parse(m.group(1)), text, flags=re.DOTALL)
-    text = re.sub(r'\$\$(.+?)\$\$', lambda m: _parse(m.group(1)), text, flags=re.DOTALL)
+    text = re.sub(r'[\\][[](.*?)[\\][\]]', lambda m: _parse(m.group(1)), text, flags=re.DOTALL)
+    text = re.sub(r'[\$]{2}(.+?)[\$]{2}', lambda m: _parse(m.group(1)), text, flags=re.DOTALL)
 
     # Step 3: Inline $...$
-    text = re.sub(r'\$(.+?)\$', lambda m: _parse(m.group(1)), text)
+    text = re.sub(r'[\$](.+?)[\$]', lambda m: _parse(m.group(1)), text)
 
     return text
 
-
-def escape_markdown(text: str) -> str:
-    """Escape markdown special characters."""
-    chars = ['\\', '`', '*', '_', '{', '}', '[', ']', '(', ')', '#', '+', '-', '.', '!', '|']
-    for c in chars:
-        text = text.replace(c, f'\\{c}')
-    return text
 
 
 def format_for_display(text: str) -> str:
-    """Format model output: parse LaTeX, escape Markdown."""
-    if '$' in text or '```' in text or '\\[' in text:
-        text = parse_latex(text)
-    text = escape_markdown(text)
+    """Format model output: parse LaTeX, preserve markdown for Textual."""
+    text = parse_latex(text)
     # Single newlines → double for visible Markdown line breaks
     text = re.sub(r'(?<!\n)\n(?!\n)', '\n\n', text)
     return text

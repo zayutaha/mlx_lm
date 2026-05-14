@@ -200,7 +200,24 @@ class LatexParser:
             return self._parse_expr()
         raw = self.text[self.pos:end_pos].strip()
         self.pos = end_pos + len(end_tag)
-        # Clean hline and split into rows on \\ (double backslash)
+
+        # Text environments handled differently (no \\ row splitting)
+        text_envs = ('center', 'flushleft', 'flushright', 'quote',
+                     'quotation', 'verbatim', 'comment')
+        if env_name in text_envs:
+            if env_name == 'verbatim':
+                return '```\n' + raw + '\n```'
+            if env_name == 'comment':
+                return ''
+            saved = self.pos, self.text
+            self.text = raw
+            self.pos = 0
+            parsed = self._parse_expr()
+            self.pos, self.text = saved
+            if env_name in ('quote', 'quotation'):
+                return '\n'.join('> ' + line for line in parsed.split('\n'))
+            return parsed  # center, flushleft, flushright
+
         raw = raw.replace('\\hline', '')
         raw_rows = [r.strip() for r in raw.split('\\\\')]
         # Choose separator: alignments get just spaces, others get visible | 
@@ -396,11 +413,18 @@ class LatexParser:
                    'mathfrak', 'normal'):
             return self._parse_text_arg()
 
-        # === Color ===
-        if cmd == 'color':
-            # \color{red} or \color{#FF0000}
-            color_name = self._parse_text_arg()
+        # === Font sizes (strip — terminal has fixed font) ===
+        if cmd in ('tiny', 'scriptsize', 'footnotesize', 'small', 'normalsize',
+                   'large', 'Large', 'LARGE', 'huge', 'Huge'):
             return self._parse_text_arg()
+
+        # === Color ===
+        if cmd == 'textcolor':
+            self._parse_text_arg()  # color name
+            return self._parse_text_arg()  # content
+        if cmd == 'color':
+            self._parse_text_arg()  # color name (declaration)
+            return ''
 
         # === Large operators ===
         if cmd == 'sum':
@@ -503,6 +527,112 @@ class LatexParser:
             return '⌢'
         if cmd == 'bowtie':
             return '⋈'
+        if cmd == 'models':
+            return '⊧'
+        if cmd == 'perp':
+            return '⊥'
+        if cmd == 'parallel':
+            return '∥'
+
+        # === Additional Relations ===
+        if cmd == 'nmid':
+            return '∤'
+        if cmd == 'nparallel':
+            return '∦'
+        if cmd == 'vdash':
+            return '⊢'
+        if cmd == 'dashv':
+            return '⊣'
+        if cmd == 'top':
+            return '⊤'
+        if cmd == 'bot':
+            return '⊥'
+        if cmd == 'therefore':
+            return '∴'
+        if cmd == 'because':
+            return '∵'
+        if cmd == 'triangleleft':
+            return '◃'
+        if cmd == 'triangleright':
+            return '▹'
+        if cmd == 'trianglelefteq':
+            return '⊴'
+        if cmd == 'trianglerighteq':
+            return '⊵'
+        if cmd == 'wr':
+            return '≀'
+
+        # === More Arrows ===
+        if cmd == 'longleftarrow':
+            return '⟵'
+        if cmd == 'longrightarrow':
+            return '⟶'
+        if cmd == 'longleftrightarrow':
+            return '⟷'
+        if cmd == 'Longleftarrow':
+            return '⟸'
+        if cmd == 'Longrightarrow':
+            return '⟹'
+        if cmd == 'Longleftrightarrow':
+            return '⟺'
+        if cmd == 'longmapsto':
+            return '⟼'
+        if cmd == 'updownarrow':
+            return '↕'
+        if cmd == 'Updownarrow':
+            return '⇕'
+        if cmd == 'twoheadrightarrow':
+            return '↠'
+        if cmd == 'twoheadleftarrow':
+            return '↞'
+
+        # === Logic ===
+        if cmd in ('lnot', 'neg'):
+            return '¬'
+        if cmd == 'land':
+            return '∧'
+        if cmd == 'lor':
+            return '∨'
+
+        # === Geometry / Shapes ===
+        if cmd == 'angle':
+            return '∠'
+        if cmd == 'measuredangle':
+            return '∡'
+        if cmd == 'triangle':
+            return '△'
+        if cmd == 'Box':
+            return '□'
+        if cmd == 'blacksquare':
+            return '■'
+        if cmd == 'bigcirc':
+            return '○'
+        if cmd == 'checkmark':
+            return '✓'
+
+        # === Card suits ===
+        if cmd == 'spadesuit':
+            return '♠'
+        if cmd == 'heartsuit':
+            return '♡'
+        if cmd == 'diamondsuit':
+            return '♢'
+        if cmd == 'clubsuit':
+            return '♣'
+
+        # === Other symbols ===
+        if cmd == 'flat':
+            return '♭'
+        if cmd == 'natural':
+            return '♮'
+        if cmd == 'sharp':
+            return '♯'
+        if cmd == 'aleph':
+            return 'ℵ'
+        if cmd == 'beth':
+            return 'ℶ'
+        if cmd == 'wp':
+            return '℘'
 
         # === Set theory ===
         if cmd == 'emptyset':
@@ -623,8 +753,6 @@ class LatexParser:
             return '~' + self._parse_text_arg()
         if cmd == 'overline':
             return '‾' + self._parse_text_arg()
-        if cmd == 'underline':
-            return '_' + self._parse_text_arg()
 
         # === Over/under braces ===
         if cmd == 'overbrace':
@@ -639,6 +767,24 @@ class LatexParser:
         # === Boxed ===
         if cmd == 'boxed':
             return '[ ' + self._parse_text_arg() + ' ]'
+
+        # === Sectioning → Markdown headings ===
+        if cmd == 'section':
+            return '## ' + self._parse_text_arg()
+        if cmd == 'subsection':
+            return '### ' + self._parse_text_arg()
+        if cmd == 'subsubsection':
+            return '#### ' + self._parse_text_arg()
+        if cmd == 'paragraph':
+            return '**' + self._parse_text_arg() + '**'
+
+        # === Underline / Strikethrough / Emphasis ===
+        if cmd in ('underline', 'uline'):
+            return self._parse_text_arg()
+        if cmd in ('sout', 'strikethrough', 'cancel', 'xcancel'):
+            return self._parse_text_arg()
+        if cmd == 'emph':
+            return self._parse_text_arg()
 
         # === Stackrel ===
         if cmd == 'stackrel':
