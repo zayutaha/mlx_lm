@@ -1334,38 +1334,56 @@ Screen {
             await self._handle_crash("Model failed to initialize")
             return
 
-        # Update spinner to show warming up phase
-        spinner = self.query_one("#load-spinner", LoadingSpinner)
-        spinner.message = "Warming up..."
-        spinner.spinner_index = 0
-        spinner.update(f"[bold #f0a500]{spinner.SPINNERS[0]} {spinner.message}")
-
-        # Warm-up: send dummy message to verify model works
+        # Check if model outputs 4 tokens
+        token_count = 0
+        buf = ""
+        start_time = asyncio.get_event_loop().time()
+        
         try:
-            self.proc.stdin.write(b"warmup\n")
+            self.proc.stdin.write(b"test\n")
             await self.proc.stdin.drain()
         except Exception:
             await self._handle_crash("")
             return
 
-        # Wait for warm-up response (with timeout)
-        buf = await self._read_until_prompt(timeout=30)
-        if buf is None:
-            await self._handle_crash("Model warm-up failed")
-            return
+        # Wait for 4 tokens (approximately - by checking for spacing/newlines)
+        while token_count < 4:
+            if asyncio.get_event_loop().time() - start_time > 30:
+                await self._handle_crash("Model token check timeout")
+                return
+            
+            try:
+                chunk = await asyncio.wait_for(
+                    self.proc.stdout.read(256), timeout=1.0
+                )
+            except asyncio.TimeoutError:
+                continue
+            
+            if not chunk:
+                await self._handle_crash("Model stopped responding")
+                return
+            
+            buf += chunk.decode(errors="ignore")
+            
+            # Count tokens as words/chunks (separated by spaces or newlines)
+            token_count = len(buf.split())
+            
+            # Stop if we hit the prompt marker
+            if buf.endswith(TUI_PROMPT_MARKER):
+                break
 
-        # Reset conversation so user doesn't see warm-up
+        # Stop model generation after 4 tokens
         try:
-            self.proc.stdin.write(b"r\n")
+            self.proc.stdin.write(b"\x04")  # Send Ctrl+D to stop
             await self.proc.stdin.drain()
         except Exception:
             pass
 
-        # Wait for reset to complete (with timeout)
-        buf = await self._read_until_prompt(timeout=10)
-        if buf is None:
-            await self._handle_crash("Model reset failed")
-            return
+        # Read until prompt to clear the buffer
+        try:
+            await self._read_until_prompt(timeout=5)
+        except Exception:
+            pass
 
         self.crash_count = 0
         self._show_chat_ui()
@@ -1605,7 +1623,7 @@ Screen {
                 
                 # Small delay to let subprocess fully settle
                 await asyncio.sleep(0.1)
-            except Exception as e:
+            except Exception:
                 pass
         
         # Hide personality selector and show chat/input
