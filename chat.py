@@ -496,7 +496,7 @@ def format_for_display(text: str) -> str:
 
 def strip_prompt_markers(text: str) -> str:
     lines = text.splitlines()
-    clean = [l for l in lines if not l.strip().startswith(">>") and not l.startswith("[INFO]")]
+    clean = [l for l in lines if not l.startswith("[INFO]")]
     return "\n".join(clean).strip()
 
 
@@ -1301,7 +1301,7 @@ Screen {
         if opts["max_kv_size"] is not None:
             cmd.extend(["--max-kv-size", str(opts["max_kv_size"])])
         if opts["turbo_kv_bits"] is not None:
-            cmd.extend(["--turbo-kv-bits", str(opts["turbo_kv_bits"])])
+            cmd.extend(["--turbo-kv-bits", str(int(opts["turbo_kv_bits"]))])
         if opts["turbo_fp16_layers"] is not None:
             cmd.extend(["--turbo-fp16-layers", str(opts["turbo_fp16_layers"])])
         return cmd
@@ -1310,16 +1310,18 @@ Screen {
         self.loading = True
         env = os.environ.copy()
         env["PYTHONPATH"] = os.getcwd()
-        
+
+        stderr_log = Path(f"/tmp/mlx_lm_chat_{self.selected_model}.log")
+
         # Build command with selected model
         model_path = str(Path.home() / ".omlx" / "models" / self.selected_model)
         cmd = self._build_model_command(model_path)
-        
+
         self.proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=open(stderr_log, "w"),
             env=env,
             start_new_session=True,
         )
