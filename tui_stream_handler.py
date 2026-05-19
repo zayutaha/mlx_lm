@@ -4,7 +4,7 @@ from textual.containers import VerticalScroll
 from textual.widgets import Markdown
 
 from tui_commands import TUI_PROMPT_MARKER
-from tui_latex import format_for_display, strip_prompt_markers
+from textual_ui.latex import format_for_display, strip_prompt_markers
 
 
 async def run_model_stream(chat, user_text: str):

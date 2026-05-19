@@ -18,7 +18,7 @@ from textual.containers import VerticalScroll, Vertical, Horizontal, Center, Mid
 from textual.events import Key, Click
 
 from tui_commands import TUI_PROMPT_MARKER, ModelOrchestrator
-from tui_styles import CHAT_CSS, LOGO, WELCOME_MESSAGES
+from textual_ui.styles import CHAT_CSS, LOGO, WELCOME_MESSAGES
 from tui_config import (
     DEFAULT_MODEL_OPTIONS,
     load_model_configs,
@@ -27,8 +27,8 @@ from tui_config import (
     save_model_configs,
     save_model_options,
 )
-from tui_latex import format_for_display, strip_prompt_markers
-from tui_personalities import PERSONALITIES
+from textual_ui.latex import format_for_display, strip_prompt_markers
+from textual_ui.personas import PERSONALITIES
 
 
 
