@@ -12,7 +12,6 @@ tk.key_to_character = safe_key_to_character
 import asyncio
 import os
 import random
-import signal
 from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.widgets import Markdown, Static, Button
@@ -25,7 +24,6 @@ from tui_config import (
     MODEL_CONFIGS_PATH,
     OPTIONS_STATE_PATH,
     OPTION_SPECS,
-    SLASH_COMMANDS,
     load_model_configs,
     load_saved_model_options,
     normalize_model_options,
@@ -157,62 +155,7 @@ class ModelConfigEditor(Static):
         }
 
 
-class SlashCommandMenu(Static):
-    """Show matching slash commands inline."""
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.matches: list[tuple[str, str]] = []
-        self.selected_index = 0
-
-    def update_matches(self, query: str) -> bool:
-        normalized = query.strip().lower()
-        if not normalized.startswith("/"):
-            self.matches = []
-            self.selected_index = 0
-            self.display = False
-            return False
-
-        if normalized == "/":
-            self.matches = list(SLASH_COMMANDS.items())
-        else:
-            self.matches = [
-                (command, description)
-                for command, description in SLASH_COMMANDS.items()
-                if command.startswith(normalized)
-            ]
-        if not self.matches:
-            self.selected_index = 0
-            self.display = False
-            return False
-
-        self.selected_index = min(self.selected_index, len(self.matches) - 1)
-        self.render_list()
-        self.display = True
-        return True
-
-    def render_list(self) -> None:
-        lines = ["[bold #f0a500]Commands[/bold #f0a500]\n"]
-        for index, (command, description) in enumerate(self.matches):
-            if index == self.selected_index:
-                lines.append(f"[bold #f0a500]❯ {command}[/bold #f0a500]")
-            else:
-                lines.append(f"  [bold]{command}[/bold]")
-            lines.append(f"  [dim]{description}[/dim]")
-        lines.append("\n[dim](↑/↓ navigate, Enter select)[/dim]")
-        self.update("\n".join(lines))
-
-    def move_selection(self, direction: int) -> bool:
-        if not self.matches:
-            return False
-        self.selected_index = (self.selected_index + direction) % len(self.matches)
-        self.render_list()
-        return True
-
-    def selected_command(self) -> str | None:
-        if not self.matches:
-            return None
-        return self.matches[self.selected_index][0]
+from tui_slash_command_menu import SlashCommandMenu
 
 
 class OptionsSelector(Static):
