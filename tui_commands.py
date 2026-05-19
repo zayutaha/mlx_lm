@@ -3,6 +3,7 @@ import os
 import signal
 from pathlib import Path
 
+from tui_config import load_model_configs
 from tui_personalities import SYSTEM_PROMPT
 
 MODEL_PATH = os.getenv("MLX_MODEL", "/Users/zayaantaha/.omlx/models/SSHVL")

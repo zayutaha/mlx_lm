@@ -19,7 +19,7 @@ from textual.widgets import Markdown, TextArea, Static, Button
 from textual.containers import VerticalScroll, Vertical, Horizontal, Center, Middle
 from textual.events import Key, Click
 
-from tui_commands import BASE_CMD, MODEL_PATH, TUI_PROMPT_MARKER
+from tui_commands import BASE_CMD, MODEL_PATH, TUI_PROMPT_MARKER, ModelRunner
 from tui_config import (
     DEFAULT_MODEL_OPTIONS,
     MODEL_CONFIGS_PATH,
@@ -709,9 +709,7 @@ Screen {
         self.selected_model = None
         self.selected_personality = "default"
         self.model_options = load_saved_model_options()
-        self.proc = None
-        self.proc_pid = None
-        self.proc_pgid = None
+        self.runner = ModelRunner()
         self.query_one("#options-selector", OptionsSelector).set_options(self.model_options)
         self.query_one("#model-selector", ModelSelector).models = get_available_models(self.model_options)
         self.query_one("#model-selector", ModelSelector).render_list()
@@ -750,87 +748,13 @@ Screen {
 
     async def initialize_model(self):
         self.loading = True
-        env = os.environ.copy()
-        env["PYTHONPATH"] = os.getcwd()
-
-        stderr_log = Path(f"/tmp/mlx_lm_chat_{self.selected_model}.log")
-
-        # Build command with selected model
         model_path = str(Path.home() / ".omlx" / "models" / self.selected_model)
-        cmd = self._build_model_command(model_path)
-
-        self.proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=open(stderr_log, "w"),
-            env=env,
-            start_new_session=True,
-        )
-        
-        # Store PID for later killing
-        self.proc_pid = self.proc.pid
-        self.proc_pgid = self.proc.pid
-
-        buf = await self._read_until_prompt()
-
-        if buf is None:
+        ok = await self.runner.start(model_path, self.model_options, self.current_system_prompt)
+        if ok:
+            self.crash_count = 0
+            self._show_chat_ui()
+        else:
             await self._handle_crash("Model failed to initialize")
-            return
-
-        # Check if model outputs 4 tokens
-        token_count = 0
-        buf = ""
-        start_time = asyncio.get_event_loop().time()
-        
-        try:
-            self.proc.stdin.write(b"test\n")
-            await self.proc.stdin.drain()
-        except Exception:
-            await self._handle_crash("")
-            return
-
-        # Wait for 4 tokens (approximately - by checking for spacing/newlines)
-        while token_count < 4:
-            if asyncio.get_event_loop().time() - start_time > 30:
-                await self._handle_crash("Model token check timeout")
-                return
-            
-            try:
-                chunk = await asyncio.wait_for(
-                    self.proc.stdout.read(256), timeout=1.0
-                )
-            except asyncio.TimeoutError:
-                continue
-            
-            if not chunk:
-                await self._handle_crash("Model stopped responding")
-                return
-            
-            buf += chunk.decode(errors="ignore")
-            
-            # Count tokens as words/chunks (separated by spaces or newlines)
-            token_count = len(buf.split())
-            
-            # Stop if we hit the prompt marker
-            if buf.endswith(TUI_PROMPT_MARKER):
-                break
-
-        # Stop model generation after 4 tokens
-        try:
-            self.proc.stdin.write(b"\x04")  # Send Ctrl+D to stop
-            await self.proc.stdin.drain()
-        except Exception:
-            pass
-
-        # Read until prompt to clear the buffer
-        try:
-            await self._read_until_prompt(timeout=5)
-        except Exception:
-            pass
-
-        self.crash_count = 0
-        self._show_chat_ui()
 
     def _show_chat_ui(self):
         self.loading = False
@@ -924,31 +848,7 @@ Screen {
         await self.query_one("#chat-center").mount(VerticalScroll(id="chat"))
 
     async def _stop_model_process(self) -> None:
-        proc = self.proc
-        pgid = self.proc_pgid
-        self.proc = None
-        self.proc_pid = None
-        self.proc_pgid = None
-
-        if not proc or proc.returncode is not None:
-            return
-
-        for sig in (signal.SIGTERM, signal.SIGKILL):
-            try:
-                if pgid:
-                    os.killpg(pgid, sig)
-                else:
-                    proc.send_signal(sig)
-            except ProcessLookupError:
-                break
-            except Exception:
-                pass
-
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=10 if sig == signal.SIGTERM else 5)
-                break
-            except asyncio.TimeoutError:
-                continue
+        await self.runner.stop()
 
     async def action_model_selected(self, model_name: str):
         """Handle model selection from the selector screen."""
@@ -1052,20 +952,12 @@ Screen {
         self.selected_personality = personality_name
         
         # Send personality change and clear to subprocess
-        if self.proc and self.proc.returncode is None:
+        if self.runner.running:
             try:
-                # Send /clear command first to reset conversation state
-                self.proc.stdin.write(b"/clear\n")
-                await self.proc.stdin.drain()
+                await self.runner.send("/clear")
                 await self._read_until_prompt(timeout=5)
-                
-                # Send personality change command
-                cmd = f"/personality_set {personality_name}\n"
-                self.proc.stdin.write(cmd.encode())
-                await self.proc.stdin.drain()
+                await self.runner.send(f"/personality_set {personality_name}")
                 await self._read_until_prompt(timeout=5)
-                
-                # Small delay to let subprocess fully settle
                 await asyncio.sleep(0.1)
             except Exception:
                 pass
@@ -1101,7 +993,7 @@ Screen {
         selector.focus()
 
     async def action_submit(self):
-        if self.busy or self.loading or not self.proc or self.proc.returncode is not None:
+        if self.busy or self.loading or not self.runner.running:
             return
 
         box = self.query_one("#input", ChatInput)
@@ -1117,10 +1009,9 @@ Screen {
         if user_text == "/clear":
             await self._reset_chat_history()
             # Also tell subprocess to clear its KV cache and message history
-            if self.proc and self.proc.returncode is None:
+            if self.runner.running:
                 try:
-                    self.proc.stdin.write(b"/clear\n")
-                    await self.proc.stdin.drain()
+                    await self.runner.send("/clear")
                     await self._read_until_prompt(timeout=5)
                 except Exception:
                     pass
@@ -1166,8 +1057,7 @@ Screen {
 
     async def action_interrupt(self):
         if self.busy:
-            self.proc.stdin.write(b"\x04")
-            await self.proc.stdin.drain()
+            await self.runner.interrupt()
             self.interrupted = True
 
     async def action_quit(self):
@@ -1208,10 +1098,8 @@ Screen {
             event.stop()
 
     async def action_reload_model(self) -> None:
-        """Manually reload model - only works if model has crashed."""
-        # Only allow reload if model is not already loaded and running
-        if self.proc and self.proc.returncode is None:
-            return  # Model is already running fine, don't reload
+        if self.runner.running:
+            return
         
         # Prevent multiple simultaneous reloads
         if self.loading or self.reloading:
@@ -1240,43 +1128,20 @@ Screen {
             self.exit("Model crashed")
 
     async def _read_until_prompt(self, timeout=60):
-        """Read until the private TUI prompt marker, with timeout."""
-        buf = ""
-        start_time = asyncio.get_event_loop().time()
-        while True:
-            # Check timeout
-            if asyncio.get_event_loop().time() - start_time > timeout:
-                return None
-            
-            try:
-                # Use wait_for to add timeout on read
-                chunk = await asyncio.wait_for(
-                    self.proc.stdout.read(256), timeout=1.0
-                )
-            except asyncio.TimeoutError:
-                continue
-            
-            if not chunk:
-                return None
-            buf += chunk.decode(errors="ignore")
-            if buf.endswith(TUI_PROMPT_MARKER):
-                return buf[: -len(TUI_PROMPT_MARKER)]
+        return await self.runner._read_until_prompt(timeout=timeout)
 
     async def run_model(self, user_text: str):
         if self.first_message:
             await asyncio.sleep(2)
             self.first_message = False
 
-        if not self.proc or self.proc.returncode is not None:
+        if not self.runner.running:
             await self._handle_crash("")
             return
 
         user_text = " ".join(user_text.split("\n"))
 
-        try:
-            self.proc.stdin.write((user_text + "\n").encode())
-            await self.proc.stdin.drain()
-        except Exception:
+        if not await self.runner.send(user_text):
             await self._handle_crash("")
             return
 
@@ -1297,7 +1162,7 @@ Screen {
         while True:
             try:
                 chunk = await asyncio.wait_for(
-                    self.proc.stdout.read(256), timeout=0.05
+                    self.runner.proc.stdout.read(256), timeout=0.05
                 )
             except asyncio.TimeoutError:
                 if self.interrupted:
