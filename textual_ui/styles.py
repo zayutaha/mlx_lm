@@ -41,10 +41,17 @@ Screen {
     display: none;
 }
 
-#chat {
-    height: 100%;
+#chat-header-logo {
     width: 88;
-    padding: 2;
+    color: #7a7a7a;
+    text-align: center;
+    margin-top: 1;
+}
+
+#chat {
+    height: 1fr;
+    width: 88;
+    padding: 1 2 2 2;
     layout: vertical;
     align: center top;
 }

@@ -30,6 +30,9 @@ class Orchestrator:
     def current_system_prompt(self) -> str:
         return PERSONALITIES.get(self.selected_personality, PERSONALITIES["default"])
 
+    def get_model_config(self, model_name: str) -> dict:
+        return load_model_configs().get(model_name, {})
+
     async def handle_submit(self) -> None:
         if self.chat.busy or self.chat.loading or not self.port.running:
             return
@@ -144,6 +147,13 @@ class Orchestrator:
             await self._load_model()
             return
         self.chat.show_model_selector()
+
+    async def handle_model_config_saved(self, model_name: str, config: dict) -> None:
+        configs = load_model_configs()
+        configs[model_name] = config
+        save_model_configs(configs)
+        if self.selected_model == model_name:
+            self.selected_personality = config.get("personality", self.selected_personality)
 
     async def handle_crash_from_chat(self, message: str = "") -> None:
         self.chat._set_busy(False)

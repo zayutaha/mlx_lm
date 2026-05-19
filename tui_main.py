@@ -42,9 +42,9 @@ class ChatUI(App):
     def __init__(self, port=None, on_crash=None, on_reload=None, on_quit=None, **kwargs):
         super().__init__(**kwargs)
         self.controller = Orchestrator(self, port=port)
-        self._on_crash = on_crash
-        self._on_reload = on_reload
-        self._on_quit = on_quit
+        self._on_crash = on_crash or self.controller.handle_crash_from_chat
+        self._on_reload = on_reload or self.controller.handle_reload
+        self._on_quit = on_quit or self.controller.handle_quit
         self.loading = False
         self.busy = False
         self.interrupted = False
@@ -78,6 +78,7 @@ class ChatUI(App):
             yield LoadingSpinner(id="load-spinner")
 
         with Vertical(id="chat-center"):
+            yield Static(LOGO, id="chat-header-logo")
             yield VerticalScroll(id="chat")
 
         with Center(id="command-menu-container"):
@@ -239,10 +240,14 @@ class ChatUI(App):
         self.query_one("#chat-center").display = False
         self.query_one("#input-center").display = False
         editor = self.query_one("#model-editor", ModelConfigEditor)
-        editor.model_name = model_name
+        editor.load_config(model_name, self.controller.get_model_config(model_name))
         editor.focus()
 
     async def action_model_editor_save(self, config: dict) -> None:
+        await self.controller.handle_model_config_saved(
+            self.query_one("#model-editor", ModelConfigEditor).model_name,
+            config,
+        )
         self.query_one("#model-editor-container").display = False
         self.query_one("#model-selector-container").display = True
         self.query_one("#model-selector", ModelSelector).focus()
@@ -270,9 +275,11 @@ class ChatUI(App):
         self.query_one("#model-selector", ModelSelector).focus()
 
     async def action_dismiss_model_selector(self) -> None:
-        self.query_one("#model-selector-container").display = False
-        self.query_one("#chat-center").display = False
-        self.query_one("#input-center").display = False
+        if self.controller.port.running:
+            self.show_chat_ui()
+            return
+        self.query_one("#model-selector-container").display = True
+        self.query_one("#model-selector", ModelSelector).focus()
 
     async def on_button_pressed(self, event: Button.Pressed):
         if event.button.id == "crash-reload":
@@ -299,6 +306,9 @@ class ChatUI(App):
         self.query_one("#model-selector-container").display = False
         self.query_one("#personality-selector-container").display = False
         self.query_one("#model-editor-container").display = False
+        self.query_one("#options-selector", OptionsSelector).set_options(
+            self.controller.model_options
+        )
         self.query_one("#options-selector-container").display = True
         self.query_one("#options-selector").focus()
 

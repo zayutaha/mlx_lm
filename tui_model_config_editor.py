@@ -16,6 +16,14 @@ class ModelConfigEditor(Static):
         self._items = self._build_items()
         self.render_list()
 
+    def load_config(self, model_name: str, config: dict) -> None:
+        self.model_name = model_name
+        self.options = dict(config.get("options", {}))
+        self.personality = config.get("personality", "default")
+        self.selected_index = 0
+        self._items = self._build_items()
+        self.render_list()
+
     def _build_items(self) -> list[dict]:
         items = []
         for spec in OPTION_SPECS:

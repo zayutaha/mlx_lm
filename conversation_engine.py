@@ -5,12 +5,12 @@ from textual.containers import VerticalScroll
 from textual_ui.latex import format_for_display, strip_prompt_markers
 
 
-async def run_model_stream(chat, user_text: str):
+async def run_model_stream(chat, port, user_text: str):
     if chat.first_message:
         await asyncio.sleep(2)
         chat.first_message = False
 
-    if not chat.port or not chat.port.running:
+    if not port or not port.running:
         if chat._on_crash:
             await chat._on_crash()
         return
@@ -26,21 +26,22 @@ async def run_model_stream(chat, user_text: str):
         return ""
 
     try:
-        async for chunk in chat.port.send_message(user_text):
+        async for chunk in port.send_message(user_text):
             buf += chunk
             if thinking_enabled:
                 if "</think>" not in buf:
-                    await chat.current_md.update("Thinking...")
+                    await chat.handle_stream_chunk("Thinking...")
                 else:
                     display = strip_prompt_markers(get_display_text(buf))
                     if display:
-                        await chat.current_md.update(f"{format_for_display(display)} ▌")
+                        await chat.handle_stream_chunk(format_for_display(display))
             else:
                 display = strip_prompt_markers(buf)
                 if display:
-                    await chat.current_md.update(f"{format_for_display(display)} ▌")
+                    await chat.handle_stream_chunk(format_for_display(display))
     except Exception:
-        await chat._handle_crash("")
+        if chat._on_crash:
+            await chat._on_crash()
         return
 
     if chat.interrupted:
@@ -52,7 +53,7 @@ async def run_model_stream(chat, user_text: str):
         display = strip_prompt_markers(buf)
 
     try:
-        await chat.current_md.update(format_for_display(display))
+        await chat.handle_stream_finished(format_for_display(display))
     except Exception:
         pass
 

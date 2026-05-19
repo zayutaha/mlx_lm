@@ -5,11 +5,14 @@ from model_lifecycle import ModelRunner
 
 
 class FakeModelPort:
-    running = True
-
     def __init__(self, chunks: list[str] | None = None):
+        self.running = True
         self._chunks = chunks or ["Hello", " world", "!"]
         self._sent: list[str] = []
+
+    async def start(self, model_path: str, options: dict, system_prompt: str) -> bool:
+        self.running = True
+        return True
 
     async def send_message(self, text: str) -> AsyncIterator[str]:
         self._sent.append(text)
@@ -29,6 +32,9 @@ class FakeModelPort:
 class ModelPort(Protocol):
     @property
     def running(self) -> bool: ...
+
+    async def start(self, model_path: str, options: dict, system_prompt: str) -> bool:
+        ...
 
     async def send_message(self, text: str) -> AsyncIterator[str]:
         ...
