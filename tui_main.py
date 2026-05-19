@@ -18,7 +18,7 @@ from textual.widgets import Markdown, Static, Button
 from textual.containers import VerticalScroll, Vertical, Horizontal, Center, Middle
 from textual.events import Key, Click
 
-from tui_commands import BASE_CMD, MODEL_PATH, TUI_PROMPT_MARKER, ModelRunner
+from tui_commands import BASE_CMD, MODEL_PATH, TUI_PROMPT_MARKER, ModelOrchestrator
 from tui_styles import CHAT_CSS, LOGO, WELCOME_MESSAGES
 from tui_config import (
     DEFAULT_MODEL_OPTIONS,
@@ -103,14 +103,11 @@ class ChatUI(App):
         self.interrupted = False
         self.loading = False
         self.first_message = True
-        self.reloading = False
-        self.crash_count = 0
-        self.max_crashes = 3
         self.crash_dialog_visible = False
         self.selected_model = None
         self.selected_personality = "default"
         self.model_options = load_saved_model_options()
-        self.runner = ModelRunner()
+        self.orch = ModelOrchestrator()
         self.query_one("#options-selector", OptionsSelector).set_options(self.model_options)
         self.query_one("#model-selector", ModelSelector).models = get_available_models(self.model_options)
         self.query_one("#model-selector", ModelSelector).render_list()
@@ -149,10 +146,8 @@ class ChatUI(App):
 
     async def initialize_model(self):
         self.loading = True
-        model_path = str(Path.home() / ".omlx" / "models" / self.selected_model)
-        ok = await self.runner.start(model_path, self.model_options, self.current_system_prompt)
+        ok = await self.orch.start_model(self.selected_model, self.model_options, self.current_system_prompt)
         if ok:
-            self.crash_count = 0
             self._show_chat_ui()
         else:
             await self._handle_crash("Model failed to initialize")
@@ -164,8 +159,8 @@ class ChatUI(App):
         self.query_one("#input-center").display = True
         self.refresh_command_menu()
 
-        if self.reloading:
-            self.reloading = False
+        if self.orch.reloading:
+            self.orch.reloading = False
             self.query_one("#input").focus()
             return
 
@@ -249,20 +244,17 @@ class ChatUI(App):
         await self.query_one("#chat-center").mount(VerticalScroll(id="chat"))
 
     async def _stop_model_process(self) -> None:
-        await self.runner.stop()
+        await self.orch.stop()
 
     async def action_model_selected(self, model_name: str):
-        """Handle model selection from the selector screen."""
         self.selected_model = model_name
-        # Load per-model personality
         configs = load_model_configs()
         model_cfg = configs.get(model_name, {})
         self.selected_personality = model_cfg.get("personality", "default")
         self.query_one("#model-selector-container").display = False
         self._show_loading_ui(f"Loading {model_name}...")
-
         await self._reset_chat_history()
-        await self._stop_model_process()
+        await self.orch.stop()
         await self.initialize_model()
 
     async def action_dismiss_model_selector(self):
@@ -303,10 +295,10 @@ class ChatUI(App):
             self.query_one("#input").focus()
             return
 
-        self.reloading = True
+        self.orch.reloading = True
         self._show_loading_ui("Applying options...")
         await self._reset_chat_history()
-        await self._stop_model_process()
+        await self.orch.stop()
         await self.initialize_model()
 
     async def action_dismiss_options_selector(self):
@@ -352,13 +344,12 @@ class ChatUI(App):
     async def action_personality_selected(self, personality_name: str):
         self.selected_personality = personality_name
         
-        # Send personality change and clear to subprocess
-        if self.runner.running:
+        if self.orch.running:
             try:
-                await self.runner.send("/clear")
-                await self._read_until_prompt(timeout=5)
-                await self.runner.send(f"/personality_set {personality_name}")
-                await self._read_until_prompt(timeout=5)
+                await self.orch.send("/clear")
+                await self.orch.read_until_prompt(timeout=5)
+                await self.orch.send(f"/personality_set {personality_name}")
+                await self.orch.read_until_prompt(timeout=5)
                 await asyncio.sleep(0.1)
             except Exception:
                 pass
@@ -394,7 +385,7 @@ class ChatUI(App):
         selector.focus()
 
     async def action_submit(self):
-        if self.busy or self.loading or not self.runner.running:
+        if self.busy or self.loading or not self.orch.running:
             return
 
         box = self.query_one("#input", ChatInput)
@@ -410,10 +401,10 @@ class ChatUI(App):
         if user_text == "/clear":
             await self._reset_chat_history()
             # Also tell subprocess to clear its KV cache and message history
-            if self.runner.running:
+            if self.orch.running:
                 try:
-                    await self.runner.send("/clear")
-                    await self._read_until_prompt(timeout=5)
+                    await self.orch.send("/clear")
+                    await self.orch.read_until_prompt(timeout=5)
                 except Exception:
                     pass
             self._set_busy(False)
@@ -458,7 +449,7 @@ class ChatUI(App):
 
     async def action_interrupt(self):
         if self.busy:
-            await self.runner.interrupt()
+            await self.orch.interrupt()
             self.interrupted = True
 
     async def action_quit(self):
@@ -466,28 +457,25 @@ class ChatUI(App):
         self.exit()
 
     async def _handle_crash(self, error_msg):
-        """Handle model crash: show dialog with quit/reload options."""
         self._set_busy(False)
         self.loading = True
-        self.crash_count += 1
+        self.orch.crash_count += 1
 
-        if self.crash_count >= self.max_crashes:
+        if self.orch.has_crashed_too_many():
             self.exit("Too many crashes, giving up")
             return
 
-        # If still initializing (no chat UI yet), auto-reload without dialog
         if self.query_one("#chat-center").display == False:
-            self.reloading = True
-            self._show_loading_ui(f"Reloading model (crash #{self.crash_count})...")
-            await self._stop_model_process()
+            self.orch.reloading = True
+            self._show_loading_ui(f"Reloading model (crash #{self.orch.crash_count})...")
+            await self.orch.stop()
             asyncio.create_task(self.initialize_model())
             return
 
-        # Show crash dialog for runtime crashes
-        self.reloading = True
+        self.orch.reloading = True
         self.crash_dialog_visible = True
         self.query_one("#crash-dialog-container").display = True
-        self.query_one("#crash-message").update(f"Model crashed (attempt {self.crash_count}/{self.max_crashes}). Reload or quit?")
+        self.query_one("#crash-message").update(f"Model crashed (attempt {self.orch.crash_count}/{self.orch.max_crashes}). Reload or quit?")
         self.query_one("#crash-reload").focus()
 
     async def on_key(self, event: Key) -> None:
@@ -499,37 +487,32 @@ class ChatUI(App):
             event.stop()
 
     async def action_reload_model(self) -> None:
-        if self.runner.running:
+        if self.orch.running:
             return
-        
-        # Prevent multiple simultaneous reloads
-        if self.loading or self.reloading:
+        if self.loading or self.orch.reloading:
             return
-        
+
         self._set_busy(False)
         self.crash_dialog_visible = False
         self.query_one("#crash-dialog-container").display = False
-        
-        # Clear chat history
         await self._reset_chat_history()
-        self.crash_count = 0
-        self.reloading = True
+        self.orch.clear_crashes()
+        self.orch.reloading = True
         self._show_loading_ui("Reloading model...")
         asyncio.create_task(self.initialize_model())
 
     async def on_button_pressed(self, event: Button.Pressed):
-        """Handle crash dialog button presses."""
         if event.button.id == "crash-reload":
             self.crash_dialog_visible = False
             self.query_one("#crash-dialog-container").display = False
-            self._show_loading_ui(f"Reloading model (crash #{self.crash_count})...")
-            await self._stop_model_process()
+            self._show_loading_ui(f"Reloading model (crash #{self.orch.crash_count})...")
+            await self.orch.stop()
             asyncio.create_task(self.initialize_model())
         elif event.button.id == "crash-quit":
             self.exit("Model crashed")
 
     async def _read_until_prompt(self, timeout=60):
-        return await self.runner._read_until_prompt(timeout=timeout)
+        return await self.orch.read_until_prompt(timeout=timeout)
 
     async def run_model(self, user_text: str):
         await run_model_stream(self, user_text)

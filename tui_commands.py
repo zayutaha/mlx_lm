@@ -182,3 +182,42 @@ class ModelRunner:
             buf += chunk.decode(errors="ignore")
             if buf.endswith(TUI_PROMPT_MARKER):
                 return buf[: -len(TUI_PROMPT_MARKER)]
+
+
+class ModelOrchestrator:
+    def __init__(self):
+        self.runner = ModelRunner()
+        self.crash_count = 0
+        self.max_crashes = 3
+        self.reloading = False
+
+    @property
+    def running(self) -> bool:
+        return self.runner.running
+
+    async def start_model(self, model_name: str, options: dict, system_prompt: str) -> bool:
+        model_path = str(Path.home() / ".omlx" / "models" / model_name)
+        ok = await self.runner.start(model_path, options, system_prompt)
+        if ok:
+            self.crash_count = 0
+            return True
+        self.crash_count += 1
+        return False
+
+    async def stop(self):
+        await self.runner.stop()
+
+    async def send(self, text: str) -> bool:
+        return await self.runner.send(text)
+
+    async def interrupt(self):
+        await self.runner.interrupt()
+
+    async def read_until_prompt(self, timeout=60):
+        return await self.runner._read_until_prompt(timeout=timeout)
+
+    def has_crashed_too_many(self) -> bool:
+        return self.crash_count >= self.max_crashes
+
+    def clear_crashes(self):
+        self.crash_count = 0

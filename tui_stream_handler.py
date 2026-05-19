@@ -12,13 +12,13 @@ async def run_model_stream(chat, user_text: str):
         await asyncio.sleep(2)
         chat.first_message = False
 
-    if not chat.runner.running:
+    if not chat.orch.running:
         await chat._handle_crash("")
         return
 
     user_text = " ".join(user_text.split("\n"))
 
-    if not await chat.runner.send(user_text):
+    if not await chat.orch.send(user_text):
         await chat._handle_crash("")
         return
 
@@ -39,7 +39,7 @@ async def run_model_stream(chat, user_text: str):
     while True:
         try:
             chunk = await asyncio.wait_for(
-                chat.runner.proc.stdout.read(256), timeout=0.05
+                chat.orch.runner.proc.stdout.read(256), timeout=0.05
             )
         except asyncio.TimeoutError:
             if chat.interrupted:
@@ -76,7 +76,7 @@ async def run_model_stream(chat, user_text: str):
             last_update = now
 
     if chat.interrupted:
-        remaining = await chat._read_until_prompt(timeout=10)
+        remaining = await chat.orch.read_until_prompt(timeout=10)
         if remaining:
             buf += remaining
 
