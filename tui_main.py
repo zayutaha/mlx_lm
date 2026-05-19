@@ -33,7 +33,8 @@ from textual_ui.personas import PERSONALITIES
 
 
 from tui_loading_spinner import LoadingSpinner
-from tui_model_picker import ModelSelector, get_available_models
+from model_registry import list_models
+from tui_model_picker import ModelSelector
 from tui_personality_selector import PersonalitySelector
 
 
@@ -55,7 +56,7 @@ class ChatUI(App):
 
     def compose(self) -> ComposeResult:
         with Center(id="model-selector-container"):
-            yield ModelSelector(get_available_models(DEFAULT_MODEL_OPTIONS), id="model-selector")
+            yield ModelSelector(list_models(DEFAULT_MODEL_OPTIONS), id="model-selector")
 
         with Center(id="personality-selector-container"):
             yield PersonalitySelector(
@@ -109,7 +110,7 @@ class ChatUI(App):
         self.model_options = load_saved_model_options()
         self.port = MLXSubprocessAdapter()
         self.query_one("#options-selector", OptionsSelector).set_options(self.model_options)
-        self.query_one("#model-selector", ModelSelector).models = get_available_models(self.model_options)
+        self.query_one("#model-selector", ModelSelector).models = list_models(self.model_options)
         self.query_one("#model-selector", ModelSelector).render_list()
         self.query_one("#model-selector-container").display = True
         self.query_one("#model-selector").focus()
@@ -241,7 +242,7 @@ class ChatUI(App):
         self.query_one("#command-menu-container").display = False
         self.query_one("#model-selector-container").display = True
         selector = self.query_one("#model-selector", ModelSelector)
-        selector.models = get_available_models(self.model_options)
+        selector.models = list_models(self.model_options)
         if self.selected_model:
             selected_names = [model[0] for model in selector.models]
             selector.selected_index = selected_names.index(self.selected_model) if self.selected_model in selected_names else 0
@@ -256,7 +257,7 @@ class ChatUI(App):
         self.query_one("#options-selector-container").display = False
         if not self.selected_model:
             selector = self.query_one("#model-selector", ModelSelector)
-            selector.models = get_available_models(self.model_options)
+            selector.models = list_models(self.model_options)
             selector.render_list()
             self.query_one("#chat-center").display = True
             self.query_one("#input-center").display = True
