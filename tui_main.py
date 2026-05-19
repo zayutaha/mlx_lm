@@ -42,6 +42,7 @@ from tui_personality_selector import PersonalitySelector
 
 from tui_model_config_editor import ModelConfigEditor
 from tui_slash_command_menu import SlashCommandMenu
+from tui_stream_handler import run_model_stream
 
 
 from tui_chat_input import ChatInput
@@ -531,105 +532,7 @@ class ChatUI(App):
         return await self.runner._read_until_prompt(timeout=timeout)
 
     async def run_model(self, user_text: str):
-        if self.first_message:
-            await asyncio.sleep(2)
-            self.first_message = False
-
-        if not self.runner.running:
-            await self._handle_crash("")
-            return
-
-        user_text = " ".join(user_text.split("\n"))
-
-        if not await self.runner.send(user_text):
-            await self._handle_crash("")
-            return
-
-        buf = ""
-        last_update = 0
-        chat = self.query_one("#chat", VerticalScroll)
-        thinking_enabled = user_text.startswith("/think")
-
-        def get_display_text(buffer):
-            last_end = buffer.rfind("</think>")
-            if last_end >= 0:
-                return buffer[last_end + len("</think>"):].strip()
-            return ""
-
-        spinner_index = 0
-        spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-
-        while True:
-            try:
-                chunk = await asyncio.wait_for(
-                    self.runner.proc.stdout.read(256), timeout=0.05
-                )
-            except asyncio.TimeoutError:
-                if self.interrupted:
-                    break
-                continue
-            except Exception:
-                await self._handle_crash("")
-                return
-
-            if not chunk:
-                await self._handle_crash("")
-                return
-
-            buf += chunk.decode(errors="ignore")
-
-            if buf.endswith(TUI_PROMPT_MARKER):
-                buf = buf[: -len(TUI_PROMPT_MARKER)]
-                break
-
-            now = asyncio.get_event_loop().time()
-            if now - last_update > 0.05:
-                if thinking_enabled:
-                    if "</think>" not in buf:
-                        spinner_index = (spinner_index + 1) % len(spinner_frames)
-                        await self.current_md.update(f"Thinking... {spinner_frames[spinner_index]}")
-                    else:
-                        display = strip_prompt_markers(get_display_text(buf))
-                        if display:
-                            await self.current_md.update(f"{format_for_display(display)} ▌")
-                else:
-                    display = strip_prompt_markers(buf)
-                    if display:
-                        await self.current_md.update(f"{format_for_display(display)} ▌")
-                last_update = now
-
-        if self.interrupted:
-            remaining = await self._read_until_prompt(timeout=10)
-            if remaining:
-                buf += remaining
-
-        if thinking_enabled:
-            display = strip_prompt_markers(get_display_text(buf))
-        else:
-            display = strip_prompt_markers(buf)
-
-        if self.interrupted:
-            display += "\n\n*— stopped*"
-            self.interrupted = False
-
-        try:
-            await self.current_md.update(format_for_display(display))
-        except Exception as e:
-            # Widget might have been removed, show error in chat
-            error_msg = f'<error: {e}>'
-            await self.current_md.update(error_msg)
-            return
-        # Only scroll to bottom on completion if user is near bottom
-        scroll_y = chat.scroll_offset.y
-        virtual_h = chat.virtual_size.height
-        widget_h = chat.region.height
-        if virtual_h <= widget_h:
-            chat.scroll_end(animate=False)
-        else:
-            max_scroll_y = virtual_h - widget_h
-            if max_scroll_y - scroll_y <= 50:
-                chat.scroll_end(animate=False)
-        self._set_busy(False)
+        await run_model_stream(self, user_text)
 
 
 if __name__ == "__main__":
