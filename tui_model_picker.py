@@ -4,7 +4,7 @@ from pathlib import Path
 from textual.events import Key
 from textual.widgets import Static
 
-from model_registry import ModelInfo, list_models
+from model_catalog import ModelInfo, list_models
 
 
 class ModelSelector(Static):

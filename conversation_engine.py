@@ -10,8 +10,9 @@ async def run_model_stream(chat, user_text: str):
         await asyncio.sleep(2)
         chat.first_message = False
 
-    if not chat.port.running:
-        await chat._handle_crash("")
+    if not chat.port or not chat.port.running:
+        if chat._on_crash:
+            await chat._on_crash()
         return
 
     chat_widget = chat.query_one("#chat", VerticalScroll)

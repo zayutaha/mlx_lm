@@ -12,39 +12,25 @@ tk.key_to_character = safe_key_to_character
 import asyncio
 import random
 from pathlib import Path
-from textual.app import App, ComposeResult
-from textual.widgets import Markdown, Static, Button
-from textual.containers import VerticalScroll, Vertical, Horizontal, Center, Middle
-from textual.events import Key, Click
 
-from tui_adapter import MLXSubprocessAdapter
+from textual.app import App, ComposeResult
+from textual.containers import Center, Horizontal, Middle, Vertical, VerticalScroll
+from textual.events import Click, Key
+from textual.widgets import Button, Markdown, Static
+
+from model_catalog import list_models
 from textual_ui.styles import CHAT_CSS, LOGO, WELCOME_MESSAGES
-from tui_config import (
-    DEFAULT_MODEL_OPTIONS,
-    load_model_configs,
-    load_saved_model_options,
-    normalize_model_options,
-    save_model_configs,
-    save_model_options,
-)
 from textual_ui.latex import format_for_display, strip_prompt_markers
 from textual_ui.personas import PERSONALITIES
 
-
-
-from tui_loading_spinner import LoadingSpinner
-from model_registry import list_models
-from tui_model_picker import ModelSelector
-from tui_personality_selector import PersonalitySelector
-
-
-from tui_model_config_editor import ModelConfigEditor
-from tui_slash_command_menu import SlashCommandMenu
-from tui_stream_handler import run_model_stream
-
-
 from tui_chat_input import ChatInput
+from tui_loading_spinner import LoadingSpinner
+from tui_model_picker import ModelSelector
+from tui_model_config_editor import ModelConfigEditor
 from tui_options_selector import OptionsSelector
+from tui_personality_selector import PersonalitySelector
+from tui_slash_command_menu import SlashCommandMenu
+from conversation_engine import run_model_stream
 
 
 class ChatUI(App):
@@ -54,9 +40,21 @@ class ChatUI(App):
     ]
     CSS = CHAT_CSS
 
+    def __init__(self, port=None, on_crash=None, on_reload=None, on_quit=None, **kwargs):
+        super().__init__(**kwargs)
+        self.port = port
+        self._on_crash = on_crash
+        self._on_reload = on_reload
+        self._on_quit = on_quit
+        self.loading = False
+        self.busy = False
+        self.interrupted = False
+        self.first_message = True
+        self.crash_dialog_visible = False
+
     def compose(self) -> ComposeResult:
         with Center(id="model-selector-container"):
-            yield ModelSelector(list_models(DEFAULT_MODEL_OPTIONS), id="model-selector")
+            yield ModelSelector(list_models({}), id="model-selector")
 
         with Center(id="personality-selector-container"):
             yield PersonalitySelector(
@@ -69,7 +67,7 @@ class ChatUI(App):
             )
 
         with Center(id="options-selector-container"):
-            yield OptionsSelector(DEFAULT_MODEL_OPTIONS, id="options-selector")
+            yield OptionsSelector({}, id="options-selector")
 
         with Center(id="model-editor-container"):
             yield ModelConfigEditor("", {}, id="model-editor")
@@ -97,38 +95,25 @@ class ChatUI(App):
                     yield Button("Quit", id="crash-quit", variant="error")
 
     async def on_mount(self):
+        self.loading = False
         self.busy = False
         self.interrupted = False
-        self.loading = False
         self.first_message = True
-        self.crash_count = 0
-        self.max_crashes = 3
-        self.reloading = False
         self.crash_dialog_visible = False
-        self.selected_model = None
-        self.selected_personality = "default"
-        self.model_options = load_saved_model_options()
-        self.port = MLXSubprocessAdapter()
-        self.query_one("#options-selector", OptionsSelector).set_options(self.model_options)
-        self.query_one("#model-selector", ModelSelector).models = list_models(self.model_options)
-        self.query_one("#model-selector", ModelSelector).render_list()
-        self.query_one("#model-selector-container").display = True
-        self.query_one("#model-selector").focus()
 
-    def _show_chat_ui(self):
+    # ── Public UI control methods (called by orchestrator) ──
+
+    def show_chat_ui(self):
         self.loading = False
         self.query_one("#splash-container").display = False
         self.query_one("#chat-center").display = True
         self.query_one("#input-center").display = True
         self.refresh_command_menu()
-        if self.reloading:
-            self.reloading = False
-            self.query_one("#input").focus()
-            return
         self.call_after_refresh(self._mount_welcome_screen)
         self.query_one("#input").focus()
 
-    def _show_loading_ui(self, message="Loading model..."):
+    def show_loading(self, message="Loading model..."):
+        self.loading = True
         self.query_one("#chat-center").display = False
         self.query_one("#input-center").display = False
         self.query_one("#command-menu-container").display = False
@@ -139,33 +124,22 @@ class ChatUI(App):
         spinner.spinner_index = 0
         spinner.update(f"[bold #f0a500]{spinner.SPINNERS[0]} {spinner.message}")
 
-    async def initialize_model(self):
-        self.loading = True
-        model_path = str(Path.home() / ".omlx" / "models" / self.selected_model)
-        ok = await self.port.start(model_path, self.model_options, self.current_system_prompt)
-        if ok:
-            self._show_chat_ui()
-        else:
-            await self._handle_crash("Model failed to initialize")
+    async def reset_chat(self):
+        old_chat = self.query_one("#chat", VerticalScroll)
+        await old_chat.remove()
+        await self.query_one("#chat-center").mount(VerticalScroll(id="chat"))
+        self._mount_welcome_screen()
 
-    @property
-    def current_system_prompt(self) -> str:
-        return PERSONALITIES.get(self.selected_personality, PERSONALITIES["default"])
+    # ── Chat UI internals ──
 
     @property
     def command_menu_visible(self) -> bool:
         return bool(self.query_one("#command-menu-container").display)
 
     def refresh_command_menu(self) -> None:
-        if (
-            self.loading
-            or self.busy
-            or self.query_one("#chat-center").display is False
-            or self.query_one("#input-center").display is False
-        ):
+        if self.loading or self.busy or not self.query_one("#chat-center").display or not self.query_one("#input-center").display:
             self.query_one("#command-menu-container").display = False
             return
-
         box = self.query_one("#input", ChatInput)
         container = self.query_one("#command-menu-container")
         menu = self.query_one("#command-menu", SlashCommandMenu)
@@ -201,175 +175,23 @@ class ChatUI(App):
         chat.mount(Static("How can I help you?", id="welcome-prompt", classes="bubble-prompt"))
         chat.scroll_end(animate=False)
 
-    async def _reset_chat_history(self) -> None:
-        old_chat = self.query_one("#chat", VerticalScroll)
-        await old_chat.remove()
-        await self.query_one("#chat-center").mount(VerticalScroll(id="chat"))
-        self._mount_welcome_screen()
-
-    async def _clear_chat_only(self) -> None:
-        """Clear chat without showing welcome screen (for personality changes mid-conversation)"""
-        old_chat = self.query_one("#chat", VerticalScroll)
-        await old_chat.remove()
-        await self.query_one("#chat-center").mount(VerticalScroll(id="chat"))
-
-    async def _stop_model_process(self) -> None:
-        await self.port.stop()
-
-    async def action_model_selected(self, model_name: str):
-        self.selected_model = model_name
-        configs = load_model_configs()
-        model_cfg = configs.get(model_name, {})
-        self.selected_personality = model_cfg.get("personality", "default")
-        self.query_one("#model-selector-container").display = False
-        self._show_loading_ui(f"Loading {model_name}...")
-        await self._reset_chat_history()
-        await self.port.stop()
-        await self.initialize_model()
-
-    async def action_dismiss_model_selector(self):
-        """Dismiss model selector and return to chat."""
-        self.query_one("#model-selector-container").display = False
-        self.query_one("#chat-center").display = True
-        self.query_one("#input-center").display = True
-        self.refresh_command_menu()
-        self.query_one("#input").focus()
-
-    async def show_model_selector(self):
-        """Show model selector during chat to switch models."""
-        self.query_one("#chat-center").display = False
-        self.query_one("#input-center").display = False
-        self.query_one("#command-menu-container").display = False
-        self.query_one("#model-selector-container").display = True
-        selector = self.query_one("#model-selector", ModelSelector)
-        selector.models = list_models(self.model_options)
-        if self.selected_model:
-            selected_names = [model[0] for model in selector.models]
-            selector.selected_index = selected_names.index(self.selected_model) if self.selected_model in selected_names else 0
-        else:
-            selector.selected_index = 0
-        selector.render_list()
-        selector.focus()
-
-    async def action_options_selected(self, options: dict[str, object]):
-        self.model_options = normalize_model_options(options)
-        save_model_options(self.model_options)
-        self.query_one("#options-selector-container").display = False
-        if not self.selected_model:
-            selector = self.query_one("#model-selector", ModelSelector)
-            selector.models = list_models(self.model_options)
-            selector.render_list()
-            self.query_one("#chat-center").display = True
-            self.query_one("#input-center").display = True
-            self.refresh_command_menu()
-            self.query_one("#input").focus()
-            return
-
-        self.reloading = True
-        self._show_loading_ui("Applying options...")
-        await self._reset_chat_history()
-        await self.port.stop()
-        await self.initialize_model()
-
-    async def action_dismiss_options_selector(self):
-        self.query_one("#options-selector-container").display = False
-        self.query_one("#chat-center").display = True
-        self.query_one("#input-center").display = True
-        self.refresh_command_menu()
-        self.query_one("#input").focus()
-
-    async def show_options_selector(self):
-        self.query_one("#chat-center").display = False
-        self.query_one("#input-center").display = False
-        self.query_one("#command-menu-container").display = False
-        self.query_one("#options-selector-container").display = True
-        selector = self.query_one("#options-selector", OptionsSelector)
-        selector.set_options(self.model_options)
-        selector.focus()
-
-    async def action_model_edit(self, model_name: str):
-        configs = load_model_configs()
-        config = configs.get(model_name, {})
-        editor = self.query_one("#model-editor", ModelConfigEditor)
-        editor.model_name = model_name
-        editor.options = dict(config.get("options", {}))
-        editor.personality = config.get("personality", "default")
-        editor._items = editor._build_items()
-        editor.selected_index = 0
-        editor.render_list()
-        self.query_one("#model-selector-container").display = False
-        self.query_one("#model-editor-container").display = True
-        editor.focus()
-
-    async def action_model_editor_save(self, config: dict):
-        editor = self.query_one("#model-editor", ModelConfigEditor)
-        model_name = editor.model_name
-        configs = load_model_configs()
-        configs[model_name] = config
-        save_model_configs(configs)
-        self.query_one("#model-editor-container").display = False
-        self.query_one("#model-selector-container").display = True
-        self.query_one("#model-selector").focus()
-
-    async def action_personality_selected(self, personality_name: str):
-        self.selected_personality = personality_name
-        
-        if self.port.running:
-            try:
-                await self.port.send_command("/clear")
-                await self.port.send_command(f"/personality_set {personality_name}")
-                await asyncio.sleep(0.1)
-            except Exception:
-                pass
-        
-        # Hide personality selector and show chat/input
-        self.query_one("#personality-selector-container").display = False
-        self.query_one("#chat-center").display = True
-        self.query_one("#input-center").display = True
-        
-        # Show welcome screen (Kaplumba logo) for new conversation
-        await self._reset_chat_history()
-        self._set_busy(False)
-        self.refresh_command_menu()
-        self.query_one("#input").focus()
-
-    async def action_dismiss_personality_selector(self):
-        self.query_one("#personality-selector-container").display = False
-        self.query_one("#chat-center").display = True
-        self.query_one("#input-center").display = True
-        self.refresh_command_menu()
-        self.query_one("#input").focus()
-
-    async def show_personality_selector(self):
-        self.query_one("#chat-center").display = False
-        self.query_one("#input-center").display = False
-        self.query_one("#command-menu-container").display = False
-        self.query_one("#personality-selector-container").display = True
-        selector = self.query_one("#personality-selector", PersonalitySelector)
-        personalities = list(selector.personalities)
-        names = [name for name, _ in personalities]
-        selector.selected_index = names.index(self.selected_personality) if self.selected_personality in names else 0
-        selector.render_list()
-        selector.focus()
+    # ── Action handlers ──
 
     async def action_submit(self):
-        if self.busy or self.loading or not self.port.running:
+        if self.busy or self.loading or not self.port or not self.port.running:
             return
 
         box = self.query_one("#input", ChatInput)
         user_text = box.text.strip()
         if not user_text:
             return
-
         box.clear()
 
         chat = self.query_one("#chat", VerticalScroll)
 
-        # If /clear command, clear the chat display AND reset subprocess state
         if user_text == "/clear":
-            await self._reset_chat_history()
-            # Also tell subprocess to clear its KV cache and message history
-            if self.port.running:
+            await self.reset_chat()
+            if self.port and self.port.running:
                 try:
                     await self.port.send_command("/clear")
                 except Exception:
@@ -379,21 +201,17 @@ class ChatUI(App):
             self.query_one("#input").focus()
             return
 
-        # If /models command, show model selector
         if user_text == "/models":
             await self.show_model_selector()
             return
-
         if user_text == "/options":
             await self.show_options_selector()
             return
-
         if user_text == "/personality":
             await self.show_personality_selector()
             return
 
         await chat.mount(Markdown(user_text, classes="bubble-user"))
-
         self.current_md = Markdown("▌", classes="bubble-assistant")
         await chat.mount(self.current_md)
         chat.scroll_end(animate=False)
@@ -415,72 +233,53 @@ class ChatUI(App):
                 await self.action_submit()
 
     async def action_interrupt(self):
-        if self.busy:
+        if self.busy and self.port:
             await self.port.interrupt()
             self.interrupted = True
 
     async def action_quit(self):
-        await self._stop_model_process()
+        if self.port:
+            await self.port.stop()
         self.exit()
 
-    async def _handle_crash(self, error_msg):
-        self._set_busy(False)
-        self.loading = True
-        self.crash_count += 1
-
-        if self.crash_count >= self.max_crashes:
-            self.exit("Too many crashes, giving up")
-            return
-
-        if self.query_one("#chat-center").display == False:
-            self.reloading = True
-            self._show_loading_ui(f"Reloading model (crash #{self.crash_count})...")
-            await self.port.stop()
-            asyncio.create_task(self.initialize_model())
-            return
-
-        self.reloading = True
-        self.crash_dialog_visible = True
-        self.query_one("#crash-dialog-container").display = True
-        self.query_one("#crash-message").update(f"Model crashed (attempt {self.crash_count}/{self.max_crashes}). Reload or quit?")
-        self.query_one("#crash-reload").focus()
-
     async def on_key(self, event: Key) -> None:
-        """Handle key presses globally."""
-        # If crash dialog is visible and Enter is pressed, trigger reload
         if event.key == "enter" and self.crash_dialog_visible:
             self.query_one("#crash-reload").press()
             event.prevent_default()
             event.stop()
 
     async def action_reload_model(self) -> None:
-        if self.port.running:
-            return
-        if self.loading or self.reloading:
-            return
-
-        self._set_busy(False)
-        self.crash_dialog_visible = False
-        self.query_one("#crash-dialog-container").display = False
-        await self._reset_chat_history()
-        self.crash_count = 0
-        self.reloading = True
-        self._show_loading_ui("Reloading model...")
-        asyncio.create_task(self.initialize_model())
+        if self._on_reload:
+            await self._on_reload()
 
     async def on_button_pressed(self, event: Button.Pressed):
         if event.button.id == "crash-reload":
-            self.crash_dialog_visible = False
-            self.query_one("#crash-dialog-container").display = False
-            self._show_loading_ui(f"Reloading model (crash #{self.crash_count})...")
-            await self.port.stop()
-            asyncio.create_task(self.initialize_model())
+            if self._on_reload:
+                await self._on_reload()
         elif event.button.id == "crash-quit":
-            self.exit("Model crashed")
+            if self._on_quit:
+                await self._on_quit()
 
     async def run_model(self, user_text: str):
         await run_model_stream(self, user_text)
 
+    async def show_model_selector(self):
+        self.query_one("#chat-center").display = False
+        self.query_one("#input-center").display = False
+        self.query_one("#command-menu-container").display = False
+        self.query_one("#model-selector-container").display = True
+        self.query_one("#model-selector").focus()
 
-if __name__ == "__main__":
-    ChatUI().run()
+    async def show_options_selector(self):
+        self.query_one("#chat-center").display = False
+        self.query_one("#input-center").display = False
+        self.query_one("#command-menu-container").display = False
+        self.query_one("#options-selector-container").display = True
+        self.query_one("#options-selector").focus()
+
+    async def show_personality_selector(self):
+        self.query_one("#chat-center").display = False
+        self.query_one("#input-center").display = False
+        self.query_one("#command-menu-container").display = False
+        self.query_one("#personality-selector-container").display = True
+        self.query_one("#personality-selector").focus()

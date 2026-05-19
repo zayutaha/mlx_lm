@@ -1,7 +1,29 @@
 import asyncio
 from typing import AsyncIterator, Protocol
 
-from tui_commands import ModelRunner
+from model_lifecycle import ModelRunner
+
+
+class FakeModelPort:
+    running = True
+
+    def __init__(self, chunks: list[str] | None = None):
+        self._chunks = chunks or ["Hello", " world", "!"]
+        self._sent: list[str] = []
+
+    async def send_message(self, text: str) -> AsyncIterator[str]:
+        self._sent.append(text)
+        for chunk in self._chunks:
+            yield chunk
+
+    async def send_command(self, text: str, timeout: int = 60) -> None:
+        self._sent.append(text)
+
+    async def interrupt(self) -> None:
+        pass
+
+    async def stop(self) -> None:
+        self.running = False
 
 
 class ModelPort(Protocol):

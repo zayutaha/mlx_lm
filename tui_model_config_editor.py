@@ -1,7 +1,7 @@
 from textual.events import Key
 from textual.widgets import Static
 
-from tui_config import OPTION_SPECS, normalize_model_options
+from settings_store import OPTION_SPECS, normalize_model_options
 
 
 class ModelConfigEditor(Static):

@@ -1,6 +1,6 @@
 from textual.widgets import Static
 
-from tui_config import SLASH_COMMANDS
+from settings_store import SLASH_COMMANDS
 
 
 class SlashCommandMenu(Static):

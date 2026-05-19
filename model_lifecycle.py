@@ -3,7 +3,7 @@ import os
 import signal
 from pathlib import Path
 
-from tui_config import load_model_configs
+from settings_store import load_model_configs
 
 TUI_PROMPT_MARKER = "<<KAPLUMBA_READY>> "
 
