@@ -1,0 +1,183 @@
+import asyncio
+import os
+import signal
+from pathlib import Path
+
+from tui_personalities import SYSTEM_PROMPT
+
+MODEL_PATH = os.getenv("MLX_MODEL", "/Users/zayaantaha/.omlx/models/SSHVL")
+
+BASE_CMD = [
+    "uv", "run", "python", "-m", "mlx_lm.chat",
+    "--model", MODEL_PATH,
+    "--temp", "0.7",
+    "--top-p", "0.8",
+    "--max-tokens", "32768",
+    "--xtc-probability", "0.0",
+    "--xtc-threshold", "0.0",
+    "--mtp",
+    "--turbo-kv-bits", "3",
+    "--turbo-fp16-layers", "2",
+    "--chat-template-args", '{"enable_thinking":false}',
+    "--system-prompt", SYSTEM_PROMPT,
+]
+
+TUI_PROMPT_MARKER = "<<KAPLUMBA_READY>> "
+
+
+def build_model_command(model_path: str, options: dict, system_prompt: str) -> list[str]:
+    model_name = Path(model_path).name
+    configs = load_model_configs()
+    model_cfg = configs.get(model_name, {})
+    opts = dict(options)
+    if model_cfg.get("options"):
+        opts.update(model_cfg["options"])
+
+    cmd = [
+        "uv", "run", "python", "-m", "mlx_lm.chat",
+        "--model", model_path,
+        "--prompt-marker", TUI_PROMPT_MARKER,
+        "--temp", str(opts["temp"]),
+        "--top-p", str(opts["top_p"]),
+        "--top-k", str(opts["top_k"]),
+        "--max-tokens", str(opts["max_tokens"]),
+        "--chat-template-args", '{"enable_thinking":false}',
+        "--system-prompt", system_prompt,
+    ]
+    if opts["mtp"]:
+        cmd.append("--mtp")
+    if opts["max_kv_size"] is not None:
+        cmd.extend(["--max-kv-size", str(opts["max_kv_size"])])
+    if opts["turbo_kv_bits"] is not None:
+        cmd.extend(["--turbo-kv-bits", str(int(opts["turbo_kv_bits"]))])
+    if opts["turbo_fp16_layers"] is not None:
+        cmd.extend(["--turbo-fp16-layers", str(opts["turbo_fp16_layers"])])
+    return cmd
+
+
+class ModelRunner:
+    def __init__(self):
+        self.proc = None
+        self.proc_pid = None
+        self.proc_pgid = None
+
+    @property
+    def running(self) -> bool:
+        return self.proc is not None and self.proc.returncode is None
+
+    async def start(self, model_path: str, options: dict, system_prompt: str) -> bool:
+        cmd = build_model_command(model_path, options, system_prompt)
+        stderr_log = Path(f"/tmp/mlx_lm_chat_{Path(model_path).name}.log")
+
+        try:
+            self.proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=open(stderr_log, "w"),
+                env={**os.environ, "PYTHONPATH": os.getcwd()},
+                start_new_session=True,
+            )
+        except Exception:
+            return False
+
+        self.proc_pid = self.proc.pid
+        self.proc_pgid = self.proc.pid
+
+        buf = await self._read_until_prompt(timeout=60)
+        if buf is None:
+            return False
+
+        token_count = 0
+        buf = ""
+        start = asyncio.get_event_loop().time()
+
+        try:
+            self.proc.stdin.write(b"test\n")
+            await self.proc.stdin.drain()
+        except Exception:
+            return False
+
+        while token_count < 4:
+            if asyncio.get_event_loop().time() - start > 30:
+                return False
+            try:
+                chunk = await asyncio.wait_for(self.proc.stdout.read(256), timeout=1.0)
+            except asyncio.TimeoutError:
+                continue
+            if not chunk:
+                return False
+            buf += chunk.decode(errors="ignore")
+            token_count = len(buf.split())
+            if buf.endswith(TUI_PROMPT_MARKER):
+                break
+
+        try:
+            self.proc.stdin.write(b"\x04")
+            await self.proc.stdin.drain()
+        except Exception:
+            pass
+        try:
+            await self._read_until_prompt(timeout=5)
+        except Exception:
+            pass
+
+        return True
+
+    async def send(self, text: str) -> bool:
+        try:
+            self.proc.stdin.write((text + "\n").encode())
+            await self.proc.stdin.drain()
+            return True
+        except Exception:
+            return False
+
+    async def interrupt(self):
+        if self.running:
+            try:
+                self.proc.stdin.write(b"\x04")
+                await self.proc.stdin.drain()
+            except Exception:
+                pass
+
+    async def stop(self):
+        proc = self.proc
+        pgid = self.proc_pgid
+        self.proc = None
+        self.proc_pid = None
+        self.proc_pgid = None
+
+        if not proc or proc.returncode is not None:
+            return
+
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                if pgid:
+                    os.killpg(pgid, sig)
+                else:
+                    proc.send_signal(sig)
+            except ProcessLookupError:
+                break
+            except Exception:
+                pass
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=10 if sig == signal.SIGTERM else 5)
+                break
+            except asyncio.TimeoutError:
+                continue
+
+    async def _read_until_prompt(self, timeout=60):
+        buf = ""
+        start = asyncio.get_event_loop().time()
+        while True:
+            if asyncio.get_event_loop().time() - start > timeout:
+                return None
+            try:
+                chunk = await asyncio.wait_for(self.proc.stdout.read(256), timeout=1.0)
+            except asyncio.TimeoutError:
+                continue
+            if not chunk:
+                return None
+            buf += chunk.decode(errors="ignore")
+            if buf.endswith(TUI_PROMPT_MARKER):
+                return buf[: -len(TUI_PROMPT_MARKER)]
