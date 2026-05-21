@@ -228,6 +228,172 @@ class TestChatUINavigation(unittest.IsolatedAsyncioTestCase):
                 await pilot.pause()
                 self.assertTrue(app.query_one("#chat-center").display)
 
+    async def test_options_selector_edit_enter_and_exit(self):
+        with patch("tui_main.list_models", return_value=sample_models()):
+            app = ChatUI(port=StubPort(running=False))
+            async with app.run_test() as pilot:
+                await app.show_options_selector()
+                await pilot.pause()
+                sel = app.query_one("#options-selector")
+                sel.selected_index = 0  # temp
+
+                # press e to enter edit mode
+                await pilot.press("e")
+                await pilot.pause()
+                self.assertTrue(sel._editing)
+                self.assertEqual(sel._edit_buffer, "")
+
+                # type a value
+                for ch in "0.5":
+                    await pilot.press(ch)
+                await pilot.pause()
+                self.assertEqual(sel._edit_buffer, "0.5")
+
+                # commit
+                await pilot.press("enter")
+                await pilot.pause()
+                self.assertFalse(sel._editing)
+                self.assertEqual(sel.options["temp"], 0.5)
+
+    async def test_options_selector_edit_escape_cancels(self):
+        with patch("tui_main.list_models", return_value=sample_models()):
+            app = ChatUI(port=StubPort(running=False))
+            app.controller.model_options = {**DEFAULT_MODEL_OPTIONS, "temp": 0.7}
+            async with app.run_test() as pilot:
+                await app.show_options_selector()
+                await pilot.pause()
+                sel = app.query_one("#options-selector")
+                sel.selected_index = 0
+
+                await pilot.press("e")
+                for ch in "0.1":
+                    await pilot.press(ch)
+                await pilot.press("escape")
+                await pilot.pause()
+                self.assertFalse(sel._editing)
+                self.assertEqual(sel.options["temp"], 0.7)
+
+    async def test_options_selector_edit_backspace(self):
+        with patch("tui_main.list_models", return_value=sample_models()):
+            app = ChatUI(port=StubPort(running=False))
+            async with app.run_test() as pilot:
+                await app.show_options_selector()
+                await pilot.pause()
+                sel = app.query_one("#options-selector")
+                sel.selected_index = 0
+
+                await pilot.press("e")
+                for ch in "123":
+                    await pilot.press(ch)
+                await pilot.pause()
+                self.assertEqual(sel._edit_buffer, "123")
+
+                await pilot.press("backspace")
+                await pilot.pause()
+                self.assertEqual(sel._edit_buffer, "12")
+
+    async def test_options_selector_edit_preserves_int_value(self):
+        with patch("tui_main.list_models", return_value=sample_models()):
+            app = ChatUI(port=StubPort(running=False))
+            async with app.run_test() as pilot:
+                await app.show_options_selector()
+                await pilot.pause()
+                sel = app.query_one("#options-selector")
+                sel.selected_index = 2  # top_k
+
+                await pilot.press("e")
+                for ch in "150":
+                    await pilot.press(ch)
+                await pilot.press("enter")
+                await pilot.pause()
+                self.assertEqual(sel.options["top_k"], 150)
+                self.assertIsInstance(sel.options["top_k"], int)
+
+    async def test_options_selector_edit_preserves_float_value(self):
+        with patch("tui_main.list_models", return_value=sample_models()):
+            app = ChatUI(port=StubPort(running=False))
+            async with app.run_test() as pilot:
+                await app.show_options_selector()
+                await pilot.pause()
+                sel = app.query_one("#options-selector")
+                sel.selected_index = 0  # temp
+
+                await pilot.press("e")
+                for ch in "0.75":
+                    await pilot.press(ch)
+                await pilot.press("enter")
+                await pilot.pause()
+                self.assertEqual(sel.options["temp"], 0.75)
+                self.assertIsInstance(sel.options["temp"], float)
+
+    async def test_options_selector_edit_auto_returns_none(self):
+        with patch("tui_main.list_models", return_value=sample_models()):
+            app = ChatUI(port=StubPort(running=False))
+            async with app.run_test() as pilot:
+                await app.show_options_selector()
+                await pilot.pause()
+                sel = app.query_one("#options-selector")
+                sel.selected_index = 4  # max_kv_size, currently None → "Auto"
+
+                await pilot.press("e")
+                for ch in "auto":
+                    await pilot.press(ch)
+                await pilot.press("enter")
+                await pilot.pause()
+                self.assertIsNone(sel.options["max_kv_size"])
+
+    async def test_options_selector_edit_decimal_dot_supported(self):
+        with patch("tui_main.list_models", return_value=sample_models()):
+            app = ChatUI(port=StubPort(running=False))
+            async with app.run_test() as pilot:
+                await app.show_options_selector()
+                await pilot.pause()
+                sel = app.query_one("#options-selector")
+                sel.selected_index = 6  # turbo_kv_bits
+
+                await pilot.press("e")
+                for ch in "2.5":
+                    await pilot.press(ch)
+                await pilot.press("enter")
+                await pilot.pause()
+                self.assertEqual(sel.options["turbo_kv_bits"], 2.5)
+
+    async def test_options_selector_edit_keeps_float_even_when_whole(self):
+        with patch("tui_main.list_models", return_value=sample_models()):
+            app = ChatUI(port=StubPort(running=False))
+            async with app.run_test() as pilot:
+                await app.show_options_selector()
+                await pilot.pause()
+                sel = app.query_one("#options-selector")
+                sel.selected_index = 0  # temp
+
+                await pilot.press("e")
+                for ch in "1.0":
+                    await pilot.press(ch)
+                await pilot.press("enter")
+                await pilot.pause()
+                self.assertEqual(sel.options["temp"], 1.0)
+                self.assertIsInstance(sel.options["temp"], float)
+
+    async def test_options_selector_enter_applies_options(self):
+        with patch("tui_main.list_models", return_value=sample_models()):
+            port = StubPort(running=True)
+            app = ChatUI(port=port)
+            async with app.run_test() as pilot:
+                app.show_chat_ui()
+                await app.show_options_selector()
+                await pilot.pause()
+                sel = app.query_one("#options-selector")
+                sel.options["temp"] = 0.5
+
+                await pilot.press("enter")
+                await pilot.pause()
+
+                self.assertTrue(port.running)
+                self.assertEqual(app.controller.model_options["temp"], 0.5)
+                self.assertTrue(app.query_one("#chat-center").display)
+                self.assertFalse(app.query_one("#options-selector-container").display)
+
     async def test_ascii_kaplumba_stays_in_scrollable_chat_content_while_chatting(self):
         with patch("tui_main.list_models", return_value=sample_models()):
             port = StubPort(running=True, chunks=["Hi"])

@@ -85,8 +85,7 @@ def normalize_model_options(options: dict[str, object] | None) -> dict[str, obje
         if key not in options:
             continue
         value = options[key]
-        if value in spec["choices"]:
-            normalized[key] = value
+        normalized[key] = value
     return normalized
 
 
