@@ -478,9 +478,11 @@ def main():
                 continue
             # Check for /think prefix to enable thinking for this message
             thinking_kwargs = dict(chat_template_kwargs)
+            used_thinking = False
             if query.startswith("/think"):
                 query = query[6:].lstrip()
                 thinking_kwargs["enable_thinking"] = True
+                used_thinking = True
             else:
                 thinking_kwargs["enable_thinking"] = False
 
@@ -556,6 +558,16 @@ def main():
                 f"at {last_response.generation_tps:.2f} tokens/sec "
                 f"(peak memory: {last_response.peak_memory:.2f} GB)"
             )
+            
+            # If thinking was used, reset the prompt cache to avoid state leakage
+            if used_thinking:
+                prompt_cache = make_prompt_cache(
+                    model,
+                    args.max_kv_size,
+                    turbo_kv_bits=args.turbo_kv_bits,
+                    turbo_fp16_layers=args.turbo_fp16_layers,
+                )
+                rprint("[INFO] Thinking cache cleared.")
 
         prompt = None
         if stop_generation:
