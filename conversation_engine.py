@@ -8,6 +8,16 @@ from textual_ui.latex import format_for_display, strip_prompt_markers
 THINKING_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
+def _detect_thinking_start(text: str) -> bool:
+    """Check if text contains thinking tag opening markers."""
+    return "<think>" in text or "<|channel>" in text
+
+
+def _has_thinking_end(text: str) -> bool:
+    """Check if text contains thinking tag closing markers."""
+    return "</think>" in text or "<channel|>" in text
+
+
 async def run_model_stream(chat, port, user_text: str):
     if chat.first_message:
         await asyncio.sleep(2)
@@ -19,29 +29,52 @@ async def run_model_stream(chat, port, user_text: str):
         return
 
     chat_widget = chat.query_one("#chat", VerticalScroll)
-    thinking_enabled = user_text.startswith("/think")
+    explicit_thinking = user_text.startswith("/think")
     buf = ""
     thinking_spinner_frame = 0
+    in_thinking = False  # Track if we're currently in a thinking block
 
     def get_display_text(buffer):
-        last_end = buffer.rfind("</think>")
+        """Extract text after the last closing think tag."""
+        # Handle both </think> and <channel|>
+        last_think_end = buffer.rfind("</think>")
+        last_channel_end = buffer.rfind("<channel|>")
+        last_end = max(last_think_end, last_channel_end)
+        
+        if last_think_end > last_channel_end:
+            last_end = last_think_end + len("</think>")
+        elif last_channel_end >= 0:
+            last_end = last_channel_end + len("<channel|>")
+        else:
+            return ""
+            
         if last_end >= 0:
-            return buffer[last_end + len("</think>"):].strip()
+            return buffer[last_end:].strip()
         return ""
 
     try:
         async for chunk in port.send_message(user_text):
             buf += chunk
-            if thinking_enabled:
-                if "</think>" not in buf:
+            
+            # Auto-detect thinking if it appears (for Gemma 4) or if explicitly enabled
+            if not in_thinking and _detect_thinking_start(buf):
+                in_thinking = True
+            
+            # Handle thinking mode (either explicit /think or auto-detected)
+            if in_thinking or explicit_thinking:
+                if not _has_thinking_end(buf):
+                    # Still thinking - show spinner
                     spinner_char = THINKING_SPINNER[thinking_spinner_frame % len(THINKING_SPINNER)]
                     await chat.handle_stream_chunk(f"Thinking {spinner_char}", show_cursor=False)
                     thinking_spinner_frame += 1
                 else:
+                    # Thinking is done - show content after thinking block
                     display = strip_prompt_markers(get_display_text(buf))
                     if display:
                         await chat.handle_stream_chunk(format_for_display(display))
+                    in_thinking = False
             else:
+                # No thinking - display normally
                 display = strip_prompt_markers(buf)
                 if display:
                     await chat.handle_stream_chunk(format_for_display(display))
@@ -53,7 +86,7 @@ async def run_model_stream(chat, port, user_text: str):
     if chat.interrupted:
         display = strip_prompt_markers(buf) + "\n\n*— stopped*"
         chat.interrupted = False
-    elif thinking_enabled:
+    elif in_thinking or explicit_thinking:
         display = strip_prompt_markers(get_display_text(buf))
     else:
         display = strip_prompt_markers(buf)
