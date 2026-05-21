@@ -30,7 +30,7 @@ PACKED_DEQUANT_KERNEL = """
     T val = centroids[idx] * scale[0];
 
     // Parallel WHT butterfly in threadgroup memory
-    threadgroup T shared[256];
+    threadgroup T shared[1024];
     shared[elem] = val;
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -77,7 +77,7 @@ PACKED_FUSED_QK_KERNEL = """
     T val = centroids[idx] * scale[0];
 
     // Parallel WHT butterfly
-    threadgroup T shared[256];
+    threadgroup T shared[1024];
     shared[elem] = val;
     threadgroup_barrier(mem_flags::mem_threadgroup);
 

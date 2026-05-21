@@ -391,6 +391,11 @@ def load_model(
             if "quantization_config" in text_config:
                 config["quantization_config"] = text_config["quantization_config"]
 
+        text_config = config.get("text_config", {})
+        for k, v in text_config.items():
+            if k not in config:
+                config[k] = v
+
         model_args = model_args_class.from_dict(config)
         model = model_class(model_args)
 
