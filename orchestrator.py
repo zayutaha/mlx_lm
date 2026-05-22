@@ -67,6 +67,38 @@ class Orchestrator:
             await self.chat.show_personality_selector()
             return
 
+        # Handle /search, /memory, /unload, /reload commands
+        if user_text.startswith("/search "):
+            search_query = user_text[8:].strip()
+            if search_query:
+                await self.chat.handle_stream_text(user_text)
+                self.chat._set_busy(True)
+                if self._stream_task and not self._stream_task.done():
+                    self._stream_task.cancel()
+                self._stream_task = asyncio.create_task(self._run_stream(user_text))
+                return
+
+        if user_text == "/memory":
+            try:
+                await self.port.send_command(user_text)
+            except Exception:
+                pass
+            return
+
+        if user_text.startswith("/unload"):
+            try:
+                await self.port.send_command(user_text)
+            except Exception:
+                pass
+            return
+
+        if user_text == "/reload":
+            try:
+                await self.port.send_command(user_text)
+            except Exception:
+                pass
+            return
+
         await self.chat.handle_stream_text(user_text)
         self.chat._set_busy(True)
 

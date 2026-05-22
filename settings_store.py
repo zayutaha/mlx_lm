@@ -7,6 +7,10 @@ SLASH_COMMANDS: dict[str, str] = {
     "/models": "Open the model picker and switch models safely.",
     "/options": "Open launch options for MTP, context, sampling, and cache knobs.",
     "/personality": "Open the personality picker: default, doctor, or historian.",
+    "/search <query>": "Search the web. Unloads model, loads a small search model, fetches results, and generates a response.",
+    "/unload <pct>": "Unload N% of model layers to free GPU memory.",
+    "/reload": "Reload all previously unloaded layers.",
+    "/memory": "Show current GPU memory usage.",
 }
 
 DEFAULT_MODEL_OPTIONS = {
