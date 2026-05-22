@@ -67,6 +67,15 @@ class Orchestrator:
             await self.chat.show_personality_selector()
             return
 
+        # Handle commands via send_command (like /clear)
+        if user_text.startswith("/search") or user_text == "/memory" or user_text.startswith("/unload") or user_text == "/reload":
+            if self.port.running:
+                try:
+                    await self.port.send_command(user_text)
+                except Exception:
+                    pass
+            return
+
         await self.chat.handle_stream_text(user_text)
         self.chat._set_busy(True)
 
