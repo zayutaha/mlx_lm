@@ -402,6 +402,10 @@ def main():
         rprint("- 'h' to display these commands")
         rprint("- '/think <message>' to enable thinking mode for that message")
         rprint(f"- '/personality_set <name>' to change personality (available: {', '.join(PERSONALITIES.keys())})")
+        rprint("- '/search <query>' to search the web and generate a response")
+        rprint("- '/memory' to show current GPU memory usage")
+        rprint("- '/unload <pct>' to unload N% of model layers (not yet implemented)")
+        rprint("- '/reload' to reload all previously unloaded layers (not yet implemented)")
 
     rprint(f"[INFO] Starting chat session with {args.model}.")
     print_help()
@@ -476,6 +480,77 @@ def main():
                     available = ", ".join(PERSONALITIES.keys())
                     rprint(f"[ERROR] Unknown personality. Available: {available}")
                 continue
+            
+            # Handle /memory command - show GPU memory usage
+            if query == "/memory":
+                cache_mem = mx.get_cache_memory() / 1e9
+                peak_mem = mx.get_peak_memory() / 1e9
+                rprint(f"[INFO] Cache memory: {cache_mem:.2f} GB | Peak memory: {peak_mem:.2f} GB")
+                continue
+            
+            # Handle /search command - web search with scraping
+            if query.startswith("/search "):
+                search_query = query[8:].strip()
+                if not search_query:
+                    rprint("[ERROR] /search requires a query. Usage: /search <query>")
+                    continue
+                try:
+                    from .web_search import search_web, scrape_url
+                    rprint("[INFO] Searching web...")
+                    results = search_web(search_query, num_results=5)
+                    if not results:
+                        rprint("[INFO] No results found.")
+                        continue
+                    # Scrape top result for context
+                    search_context = f"Search results for: {search_query}\n\n"
+                    for i, result in enumerate(results, 1):
+                        search_context += f"{i}. {result['title']}\n"
+                        search_context += f"   URL: {result['url']}\n"
+                        search_context += f"   {result['snippet']}\n\n"
+                    
+                    # Try to scrape the first result for more context
+                    if results[0].get("url"):
+                        rprint("[INFO] Scraping top result...")
+                        scraped = scrape_url(results[0]["url"])
+                        if scraped:
+                            search_context += f"Full content from {results[0]['url']}:\n{scraped[:2000]}...\n"
+                    
+                    # Create a message with search context
+                    messages = []
+                    if current_system_prompt is not None:
+                        messages.append({"role": "system", "content": current_system_prompt})
+                    messages.append({"role": "user", "content": f"Based on this search context, answer the question.\n\nContext:\n{search_context}\n\nQuestion: {search_query}"})
+                    
+                    message_history.append({"role": "user", "content": search_query})
+                    prompt = tokenizer.apply_chat_template(
+                        messages,
+                        add_generation_prompt=True,
+                        add_special_tokens=not message_history,
+                        **chat_template_kwargs,
+                    )
+                    rprint("[INFO] Generating response from search results...\n")
+                except Exception as e:
+                    rprint(f"[ERROR] Search failed: {str(e)}")
+                    continue
+                # Fall through to generation with the search-augmented prompt
+            elif query.startswith("/unload "):
+                # Parse unload percentage
+                try:
+                    pct_str = query[8:].strip()
+                    unload_pct = int(pct_str)
+                    if not (0 <= unload_pct <= 100):
+                        rprint("[ERROR] Unload percentage must be between 0 and 100")
+                        continue
+                    rprint(f"[INFO] Unloading {unload_pct}% of model layers not yet implemented.")
+                    # TODO: Implement layer unloading when MLX supports it
+                except ValueError:
+                    rprint("[ERROR] Usage: /unload <percentage>")
+                continue
+            elif query == "/reload":
+                rprint("[INFO] Reloading model layers not yet implemented.")
+                # TODO: Implement layer reloading when MLX supports it
+                continue
+            
             # Check for /think prefix to enable thinking for this message
             thinking_kwargs = dict(chat_template_kwargs)
             used_thinking = False
