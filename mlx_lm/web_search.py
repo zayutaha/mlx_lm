@@ -35,7 +35,6 @@ def _extract_main_content(soup: BeautifulSoup) -> str:
     """Extract clean text from the main content area of a page."""
     candidates = []
 
-    # Try common main-content selectors
     for sel in ("article", 'main', '[role="main"]', ".mw-parser-output",
                 ".post-content", ".entry-content", ".article-body",
                 "#article", "#content", ".content", "#mw-content-text"):
@@ -48,7 +47,6 @@ def _extract_main_content(soup: BeautifulSoup) -> str:
     if candidates:
         return max(candidates, key=len)
 
-    # Fallback: use body
     body = soup.find("body") or soup
     return body.get_text(separator="\n", strip=True)
 
@@ -60,31 +58,27 @@ def _clean_text(text: str) -> str:
 
     lines = text.splitlines()
     cleaned = []
-    skip_section = False
+    skip_to_end = False
+
+    # Wikipedia-like sections that signal end of useful content
+    end_section_triggers = re.compile(
+        r"^(references|further reading|external links|"
+        r"political offices|party political offices|"
+        r"bibliography|notes|footnotes|"
+        r"see also|sources|works cited|"
+        r"categories|hidden categories)",
+        re.I,
+    )
 
     for line in lines:
         stripped = line.strip()
 
-        # Detect Wikipedia section headers to skip
-        if re.match(
-            r"^(references|further reading|external links|"
-            r"political offices|party political offices|"
-            r"bibliography|notes|footnotes|"
-            r"see also|sources|works cited)",
-            stripped,
-            re.I,
-        ):
-            skip_section = True
+        # Once we hit References/Categories/etc, skip everything after
+        if end_section_triggers.match(stripped):
+            skip_to_end = True
             continue
 
-        # Detect end of skip section (next heading or blank before categories)
-        if skip_section:
-            if (
-                stripped.startswith("Categories") or
-                stripped.startswith("Hidden categories") or
-                re.match(r"^Retrieved from", stripped, re.I)
-            ):
-                skip_section = False
+        if skip_to_end:
             continue
 
         # Skip navigation/cookie boilerplate
@@ -98,11 +92,16 @@ def _clean_text(text: str) -> str:
             r"the free encyclopedia|this page was last edited|"
             r"retrieved from|text is available under|"
             r"by using this site|"
-            r"categories|hidden categories|"
             r"short description is different from wikidata|"
             r"use dmy dates|articles containing|"
-            r"all articles with unsourced statements|"
-            r"articles with unsourced statements)",
+            r"from wikipedia|from wikiped|"
+            r"stay connected|featured e.?books|sponsor content|"
+            r"insights & reports|share this|next story|"
+            r"editor.?s note|click to|read more|related stories|"
+            r"trending now|most popular|you may also like|"
+            r"advertisement|promoted|sponsored|"
+            r"all rights reserved|privacy settings|"
+            r"terms of service|terms and conditions)",
             stripped,
             re.I,
         ):
@@ -112,11 +111,9 @@ def _clean_text(text: str) -> str:
         if re.match(r"^[\d\-–—|/\\*•·○●■□▼▲◆◇★☆♪♫]+$", stripped):
             continue
 
-        # Skip short or empty lines
         if len(stripped) < 3:
             continue
 
-        # Skip lines that are just a page title repeat or navigation element
         if stripped.startswith("Jump to") or stripped.startswith("Contents"):
             continue
 
@@ -141,7 +138,6 @@ def scrape_url(url: str) -> Optional[str]:
 
         soup = BeautifulSoup(resp.content, "lxml")
 
-        # Remove non-content elements
         for tag in soup(["script", "style", "nav", "footer", "header",
                          "aside", "form", "button", "iframe", "noscript",
                          "svg", "canvas", "audio", "video", "menu"]):
@@ -154,3 +150,18 @@ def scrape_url(url: str) -> Optional[str]:
 
     except Exception:
         return None
+
+
+def is_relevant(title: str, snippet: str, original: str) -> bool:
+    """Check if a search result is relevant to the original query by keyword matching."""
+    keywords = set(original.lower().split())
+    stopwords = {"what", "who", "where", "when", "why", "how", "the",
+                 "and", "for", "are", "was", "were", "has", "had",
+                 "did", "does", "do", "is", "of", "to", "in", "on",
+                 "at", "by", "with", "from", "that", "this", "its"}
+    keywords = {k for k in keywords if len(k) >= 3 and k not in stopwords}
+    if not keywords:
+        return True
+    combined = (title + " " + snippet).lower()
+    matches = sum(1 for k in keywords if k in combined)
+    return matches >= 1 or (len(keywords) > 0 and matches / len(keywords) >= 0.3)
