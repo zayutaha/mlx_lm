@@ -502,25 +502,28 @@ def main():
                     if not results:
                         rprint("[INFO] No results found.")
                         continue
-                    # Scrape top result for context
-                    search_context = f"Search results for: {search_query}\n\n"
-                    for i, result in enumerate(results, 1):
-                        search_context += f"{i}. {result['title']}\n"
-                        search_context += f"   URL: {result['url']}\n"
-                        search_context += f"   {result['snippet']}\n\n"
-                    
-                    # Try to scrape the first result for more context
-                    if results[0].get("url"):
-                        rprint("[INFO] Scraping top result...")
-                        scraped = scrape_url(results[0]["url"])
-                        if scraped:
-                            search_context += f"Full content from {results[0]['url']}:\n{scraped[:4000]}...\n"
+                    # Scrape ALL results for full context
+                    rprint(f"[INFO] Scraping {len(results)} pages...")
+                    for result in results:
+                        if result.get("url"):
+                            scraped = scrape_url(result["url"])
+                            if scraped:
+                                search_context += f"Full content from {result['url']}:\n{scraped}\n\n---\n\n"
                     
                     # Create a message with search context
                     messages = []
                     if current_system_prompt is not None:
                         messages.append({"role": "system", "content": current_system_prompt})
-                    messages.append({"role": "user", "content": f"You are given web search results below. Summarize the key findings in a clear, concise way. Cite sources. Ignore navigation boilerplate.\n\nSearch results for: {search_query}\n\n{search_context}"})
+                    messages.append({"role": "user", "content": f"""You are a search results processor. Your job has two steps:
+
+Step 1 — CLEAN: Remove all navigation boilerplate, reference sections, category lists, "see also" lists, table-of-contents, "retrieved from" footers, and any other non-content text from the search results below. Keep only the substantive article text.
+
+Step 2 — ANSWER: Based on the cleaned information, provide a clear, concise answer to the query. Cite sources by name.
+
+Query: {search_query}
+
+Raw search results:
+{search_context}"""})
                     
                     # Log search context to file
                     import datetime as _dt

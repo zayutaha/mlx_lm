@@ -16,7 +16,6 @@ USER_AGENT = (
 SEARCH_TIMEOUT = 10
 SCRAPE_TIMEOUT = 15
 MAX_SCRAPE_BYTES = 200_000
-MAX_CLEAN_TEXT = 10_000
 
 
 def search_web(query: str, num_results: int = 5) -> List[dict]:
@@ -61,8 +60,33 @@ def _clean_text(text: str) -> str:
 
     lines = text.splitlines()
     cleaned = []
+    skip_section = False
+
     for line in lines:
         stripped = line.strip()
+
+        # Detect Wikipedia section headers to skip
+        if re.match(
+            r"^(references|further reading|external links|"
+            r"political offices|party political offices|"
+            r"bibliography|notes|footnotes|"
+            r"see also|sources|works cited)",
+            stripped,
+            re.I,
+        ):
+            skip_section = True
+            continue
+
+        # Detect end of skip section (next heading or blank before categories)
+        if skip_section:
+            if (
+                stripped.startswith("Categories") or
+                stripped.startswith("Hidden categories") or
+                re.match(r"^Retrieved from", stripped, re.I)
+            ):
+                skip_section = False
+            continue
+
         # Skip navigation/cookie boilerplate
         if re.match(
             r"^(skip to|jump to|navigation|main menu|search|"
@@ -71,14 +95,31 @@ def _clean_text(text: str) -> str:
             r"wikidata item|download as pdf|print/export|"
             r"cookie statement|privacy policy|about|"
             r"disclaimers|contact us|terms of use|"
-            r"the free encyclopedia|this page was last edited)",
+            r"the free encyclopedia|this page was last edited|"
+            r"retrieved from|text is available under|"
+            r"by using this site|"
+            r"categories|hidden categories|"
+            r"short description is different from wikidata|"
+            r"use dmy dates|articles containing|"
+            r"all articles with unsourced statements|"
+            r"articles with unsourced statements)",
             stripped,
             re.I,
         ):
             continue
+
+        # Skip lines that are just punctuation/symbols
+        if re.match(r"^[\d\-–—|/\\*•·○●■□▼▲◆◇★☆♪♫]+$", stripped):
+            continue
+
         # Skip short or empty lines
         if len(stripped) < 3:
             continue
+
+        # Skip lines that are just a page title repeat or navigation element
+        if stripped.startswith("Jump to") or stripped.startswith("Contents"):
+            continue
+
         cleaned.append(stripped)
 
     return "\n".join(cleaned)
@@ -108,9 +149,6 @@ def scrape_url(url: str) -> Optional[str]:
 
         text = _extract_main_content(soup)
         text = _clean_text(text)
-
-        if len(text.encode("utf-8")) > MAX_CLEAN_TEXT:
-            text = text[:MAX_CLEAN_TEXT]
 
         return text.strip() or None
 
