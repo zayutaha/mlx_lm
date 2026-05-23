@@ -565,7 +565,7 @@ def main():
                     rprint("[ERROR] Usage: /research <topic>")
                     continue
                 try:
-                    from research_agent.orchestrator import run_research
+                    from mlx_lm.research_agent.orchestrator import run_research
 
                     rprint(f"[INFO] Researching: {topic}")
                     result = run_research(

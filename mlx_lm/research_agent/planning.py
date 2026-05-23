@@ -2,8 +2,8 @@
 
 import json
 
-from research_agent._utils import call_model
-from research_agent.memory import ResearchMemory
+from ._utils import call_model
+from .memory import ResearchMemory
 
 
 def evaluate_coverage(memory: ResearchMemory, model, tokenizer, args,

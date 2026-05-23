@@ -1,13 +1,13 @@
 """Research orchestrator — runs the full research pipeline."""
 
-from research_agent.memory import ResearchMemory
-from research_agent.framing import infer_topic_type, build_dimension_map
-from research_agent.planning import evaluate_coverage, generate_queries, should_stop
-from research_agent.retrieval import (
+from .memory import ResearchMemory
+from .framing import infer_topic_type, build_dimension_map
+from .planning import evaluate_coverage, generate_queries, should_stop
+from .retrieval import (
     seed_search, search_queries, score_candidate,
     deduplicate_candidates, novelty_score,
 )
-from research_agent.normalization import normalize_docs
+from .normalization import normalize_docs
 from mlx_lm.web_search import scrape_url
 
 

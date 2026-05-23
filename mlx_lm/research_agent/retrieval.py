@@ -1,7 +1,7 @@
 """Retrieval — search, deduplicate, novelty scoring."""
 
 from mlx_lm.web_search import search_web, is_relevant
-from research_agent.memory import ResearchMemory
+from .memory import ResearchMemory
 
 
 def seed_search(topic: str, num_results: int = 15) -> list[dict]:

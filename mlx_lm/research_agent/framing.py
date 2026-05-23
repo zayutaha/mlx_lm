@@ -1,7 +1,7 @@
 """Topic framing — classify topic type and build dimension map."""
 
-from research_agent.memory import DIMENSION_TEMPLATES
-from research_agent._utils import call_model
+from .memory import DIMENSION_TEMPLATES
+from ._utils import call_model
 
 
 KNOWN_TYPES = set(DIMENSION_TEMPLATES.keys())

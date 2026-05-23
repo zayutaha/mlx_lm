@@ -2,14 +2,14 @@
 import unittest
 from unittest.mock import patch, MagicMock
 
-from research_agent.memory import ResearchMemory, DIMENSION_TEMPLATES
-from research_agent.framing import infer_topic_type, build_dimension_map, KNOWN_TYPES
-from research_agent.planning import evaluate_coverage, generate_queries, should_stop
-from research_agent.retrieval import (
+from mlx_lm.research_agent.memory import ResearchMemory, DIMENSION_TEMPLATES
+from mlx_lm.research_agent.framing import infer_topic_type, build_dimension_map, KNOWN_TYPES
+from mlx_lm.research_agent.planning import evaluate_coverage, generate_queries, should_stop
+from mlx_lm.research_agent.retrieval import (
     seed_search, novelty_score, score_candidate,
     deduplicate_candidates, _authority_score, _diversity_score
 )
-from research_agent.orchestrator import coverage_aware_selection
+from mlx_lm.research_agent.orchestrator import coverage_aware_selection
 
 
 # ═══════════════════════════════════════════════

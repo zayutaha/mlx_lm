@@ -1,6 +1,6 @@
 """Document normalization — batch process scraped docs into structured format."""
 
-from research_agent._utils import call_model
+from ._utils import call_model
 
 
 def normalize_docs(scraped_docs: list[dict], model, tokenizer, args,
