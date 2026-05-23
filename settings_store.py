@@ -12,6 +12,7 @@ SLASH_COMMANDS: dict[str, str] = {
     "/unload <pct>": "Unload N% of model layers to free GPU memory.",
     "/reload": "Reload all previously unloaded layers.",
     "/memory": "Show current GPU memory usage.",
+    "/mtp": "Toggle multi-token prediction on/off.",
 }
 
 DEFAULT_MODEL_OPTIONS = {

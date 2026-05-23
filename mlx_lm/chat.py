@@ -406,8 +406,9 @@ def main():
         rprint("- '/search <query>' to search the web and generate a response")
         rprint("- '/research <topic>' to research a topic in-depth (8 pages, detailed report)")
         rprint("- '/memory' to show current GPU memory usage")
-        rprint("- '/unload <pct>' to unload N% of model layers (not yet implemented)")
-        rprint("- '/reload' to reload all previously unloaded layers (not yet implemented)")
+        rprint("- '/unload <pct>' to unload N% of model layers")
+        rprint("- '/reload' to reload all previously unloaded layers")
+        rprint("- '/mtp' to toggle multi-token prediction on/off")
 
     rprint(f"[INFO] Starting chat session with {args.model}.")
     print_help()
@@ -704,6 +705,18 @@ Output the full research report now. Be extremely detailed — write pages, not 
                 setattr(parent, attr, saved)
                 del model._saved_layers
                 rprint("[INFO] All layers restored")
+            
+            # Handle /mtp toggle
+            if query == "/mtp":
+                # Check if model has MTP support
+                has_mtp = hasattr(getattr(model, 'model', None), 'mtp') or \
+                          hasattr(getattr(model, 'language_model', None), 'mtp')
+                if not has_mtp:
+                    rprint("[INFO] This model does not support MTP")
+                    continue
+                args.mtp = not args.mtp
+                rprint(f"[INFO] MTP {'enabled' if args.mtp else 'disabled'}")
+                continue
             
             # Check for /think prefix to enable thinking for this message
             thinking_kwargs = dict(chat_template_kwargs)
