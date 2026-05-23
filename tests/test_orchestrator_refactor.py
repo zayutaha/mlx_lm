@@ -73,8 +73,9 @@ class FakePort:
         if False:
             yield text
 
-    async def send_command(self, text: str, timeout: int = 60) -> None:
+    async def send_command(self, text: str, timeout: int = 60) -> str | None:
         self.sent_commands.append(text)
+        return None
 
     async def interrupt(self) -> None:
         return None

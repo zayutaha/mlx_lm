@@ -67,6 +67,50 @@ class Orchestrator:
             await self.chat.show_personality_selector()
             return
 
+        # Non-generation slash commands handled locally
+        if user_text == "/memory":
+            self.chat._set_busy(True)
+            try:
+                resp = await self.port.send_command("/memory")
+                if resp:
+                    lines = [l for l in resp.splitlines() if not l.startswith("[INFO]")]
+                    display = "\n".join(lines).strip() or resp.strip()
+                    await self.chat.handle_stream_text(user_text)
+                    await self.chat.handle_stream_finished(display)
+            except Exception:
+                await self.chat.handle_stream_text(user_text)
+                await self.chat.handle_stream_finished("Failed to get memory info")
+            self.chat._set_busy(False)
+            self.chat.refresh_command_menu()
+            self.chat.query_one("#input").focus()
+            return
+
+        if user_text == "/reload":
+            self.chat._set_busy(True)
+            try:
+                resp = await self.port.send_command("/reload")
+            except Exception:
+                pass
+            await self.chat.handle_stream_text(user_text)
+            await self.chat.handle_stream_finished("")
+            self.chat._set_busy(False)
+            self.chat.refresh_command_menu()
+            self.chat.query_one("#input").focus()
+            return
+
+        if user_text.startswith("/unload "):
+            self.chat._set_busy(True)
+            try:
+                resp = await self.port.send_command(user_text)
+            except Exception:
+                pass
+            await self.chat.handle_stream_text(user_text)
+            await self.chat.handle_stream_finished("")
+            self.chat._set_busy(False)
+            self.chat.refresh_command_menu()
+            self.chat.query_one("#input").focus()
+            return
+
         await self.chat.handle_stream_text(user_text)
         self.chat._set_busy(True)
 

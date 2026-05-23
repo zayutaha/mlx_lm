@@ -483,6 +483,7 @@ def main():
             
             # Handle /memory command - show GPU memory usage
             if query == "/memory":
+                rprint("[INFO] Memory stats")
                 cache_mem = mx.get_cache_memory() / 1e9
                 peak_mem = mx.get_peak_memory() / 1e9
                 rprint(f"[INFO] Cache memory: {cache_mem:.2f} GB | Peak memory: {peak_mem:.2f} GB")
@@ -525,14 +526,14 @@ def main():
                     prompt = tokenizer.apply_chat_template(
                         messages,
                         add_generation_prompt=True,
-                        add_special_tokens=not message_history,
+                        add_special_tokens=True,
                         **chat_template_kwargs,
                     )
                     rprint("[INFO] Generating response from search results...\n")
+                    continue  # Skip to generation with search-augmented prompt
                 except Exception as e:
                     rprint(f"[ERROR] Search failed: {str(e)}")
                     continue
-                # Fall through to generation with the search-augmented prompt
             elif query.startswith("/unload "):
                 # Parse unload percentage
                 try:

@@ -19,8 +19,9 @@ class FakeModelPort:
         for chunk in self._chunks:
             yield chunk
 
-    async def send_command(self, text: str, timeout: int = 60) -> None:
+    async def send_command(self, text: str, timeout: int = 60) -> str | None:
         self._sent.append(text)
+        return None
 
     async def interrupt(self) -> None:
         pass
@@ -39,9 +40,9 @@ class ModelPort(Protocol):
     async def send_message(self, text: str) -> AsyncIterator[str]:
         ...
 
-    async def send_command(self, text: str, timeout: int = 60) -> None:
+    async def send_command(self, text: str, timeout: int = 60) -> str | None:
         ...
-
+    
     async def interrupt(self) -> None:
         ...
 
@@ -100,9 +101,9 @@ class MLXSubprocessAdapter:
             if remaining:
                 yield remaining
 
-    async def send_command(self, text: str, timeout: int = 60) -> None:
+    async def send_command(self, text: str, timeout: int = 60) -> str | None:
         await self._runner.send(text)
-        await self._read_until_prompt(timeout=timeout)
+        return await self._read_until_prompt(timeout=timeout)
 
     async def interrupt(self) -> None:
         self._interrupted = True

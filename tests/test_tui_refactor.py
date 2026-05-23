@@ -30,8 +30,9 @@ class StubPort:
         for chunk in self.chunks:
             yield chunk
 
-    async def send_command(self, text: str, timeout: int = 60) -> None:
+    async def send_command(self, text: str, timeout: int = 60) -> str | None:
         self.commands.append(text)
+        return None
 
     async def interrupt(self) -> None:
         self.interrupts += 1
