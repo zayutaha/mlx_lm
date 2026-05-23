@@ -32,7 +32,7 @@ def build_model_command(model_path: str, options: dict, system_prompt: str) -> l
     if opts["max_kv_size"] is not None:
         cmd.extend(["--max-kv-size", str(opts["max_kv_size"])])
     if opts["turbo_kv_bits"] is not None:
-        cmd.extend(["--turbo-kv-bits", str(int(opts["turbo_kv_bits"]))])
+        cmd.extend(["--turbo-kv-bits", str(opts["turbo_kv_bits"])])
     if opts["turbo_fp16_layers"] is not None:
         cmd.extend(["--turbo-fp16-layers", str(opts["turbo_fp16_layers"])])
     return cmd

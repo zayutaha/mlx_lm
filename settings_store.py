@@ -87,7 +87,7 @@ OPTION_SPECS = [
     {
         "key": "turbo_kv_bits",
         "label": "Turbo KV bits",
-        "choices": [None, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0],
+        "choices": [None, 1, 2, 3, 4],
         "description": "KV compression. Less RAM, more compromise.",
     },
     {
