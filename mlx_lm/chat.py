@@ -497,33 +497,85 @@ def main():
                     continue
                 try:
                     from .web_search import search_web, scrape_url
-                    rprint("[INFO] Searching web...")
-                    results = search_web(search_query, num_results=5)
-                    if not results:
-                        rprint("[INFO] No results found.")
-                        continue
-                    # Scrape ALL results for full context
-                    rprint(f"[INFO] Scraping {len(results)} pages...")
+
+                    # ── Pass 1: Generate 3 search queries using the model ──
+                    rprint("[INFO] Generating search queries...")
+                    qgen_messages = [
+                        {"role": "system", "content": "You generate diverse web search queries. Given a question, output 3 different search queries on separate lines. Each query should cover a different angle or phrasing. Do not number them. Do not include any other text."},
+                        {"role": "user", "content": f"Generate 3 search queries for: {search_query}"},
+                    ]
+                    qgen_prompt = tokenizer.apply_chat_template(
+                        qgen_messages,
+                        add_generation_prompt=True,
+                        add_special_tokens=True,
+                    )
+                    qgen_cache = make_prompt_cache(
+                        model, args.max_kv_size,
+                        turbo_kv_bits=args.turbo_kv_bits,
+                        turbo_fp16_layers=args.turbo_fp16_layers,
+                    )
+                    qgen_sampler = make_sampler(
+                        args.temp, args.top_p, top_k=args.top_k,
+                        xtc_threshold=args.xtc_threshold,
+                        xtc_probability=args.xtc_probability,
+                        xtc_special_tokens=(
+                            tokenizer.encode("\n") + list(tokenizer.eos_token_ids)
+                        ),
+                    )
+                    qgen_text = ""
+                    for resp in stream_generate(
+                        model, tokenizer, qgen_prompt,
+                        max_tokens=128, sampler=qgen_sampler,
+                        prompt_cache=qgen_cache,
+                        turbo_kv_bits=args.turbo_kv_bits,
+                        turbo_fp16_layers=args.turbo_fp16_layers,
+                        kv_bits=args.kv_bits,
+                        kv_group_size=args.kv_group_size,
+                        quantized_kv_start=args.quantized_kv_start,
+                        mtp=args.mtp,
+                        prefill_step_size=args.prefill_step_size,
+                    ):
+                        qgen_text += resp.text
+
+                    # Parse the 3 queries from the output
+                    queries = [
+                        line.strip().lstrip("0123456789.)- ")
+                        for line in qgen_text.splitlines()
+                        if line.strip()
+                    ][:3]
+                    if not queries:
+                        queries = [search_query]
+                    rprint(f"[INFO] Generated {len(queries)} search queries")
+
+                    # ── Pass 2: Search + scrape each query ──
                     search_context = ""
-                    for result in results:
-                        if result.get("url"):
-                            scraped = scrape_url(result["url"])
-                            if scraped:
-                                search_context += f"Full content from {result['url']}:\n{scraped}\n\n---\n\n"
-                    
-                    # Create a message with search context
+                    seen_urls = set()
+                    for q in queries:
+                        rprint(f"[INFO] Searching: {q}")
+                        results = search_web(q, num_results=3)
+                        for result in results:
+                            url = result.get("url", "")
+                            if url and url not in seen_urls:
+                                seen_urls.add(url)
+                                rprint(f"  -> scraping: {result['title']}")
+                                scraped = scrape_url(url)
+                                if scraped:
+                                    search_context += f"## {result['title']}\nSource: {url}\n\n{scraped}\n\n---\n\n"
+                                break
+
+                    if not search_context:
+                        rprint("[ERROR] No content could be scraped.")
+                        continue
+
+                    # ── Pass 3: Generate final answer ──
                     messages = []
                     if current_system_prompt is not None:
                         messages.append({"role": "system", "content": current_system_prompt})
-                    messages.append({"role": "user", "content": f"""You are a search results processor. Your job has two steps:
+                    messages.append({"role": "user", "content": f"""You are a search results analyst. Based ONLY on the search results below, answer the question. If the results don't contain enough info, say so. Cite sources.
 
-Step 1 — CLEAN: Remove all navigation boilerplate, reference sections, category lists, "see also" lists, table-of-contents, "retrieved from" footers, and any other non-content text from the search results below. Keep only the substantive article text.
+Question: {search_query}
 
-Step 2 — ANSWER: Based on the cleaned information, provide a clear, concise answer to the query. Cite sources by name.
-
-Query: {search_query}
-
-Raw search results:
+Search results:
 {search_context}"""})
                     
                     # Log search context to file
