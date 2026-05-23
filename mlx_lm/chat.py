@@ -578,12 +578,11 @@ def main():
                     rprint(f"[INFO] Research complete: {result['num_sources']} sources, coverage ~{coverage_pct}%")
 
                     # Build big model prompt with context
-                    messages = []
+                    sys_parts = []
                     if current_system_prompt is not None:
-                        messages.append({"role": "system", "content": current_system_prompt})
-
-                    # Inject research context as system-level reference
-                    messages.append({"role": "system", "content": f"The following research context about \"{topic}\" was gathered from web sources. Use it to inform your responses throughout this conversation."})
+                        sys_parts.append(current_system_prompt)
+                    sys_parts.append(f"The following research context about \"{topic}\" was gathered from web sources. Use it to inform your responses throughout this conversation.")
+                    messages = [{"role": "system", "content": "\n\n".join(sys_parts)}]
 
                     messages.append({"role": "user", "content": f"""You are a research synthesis engine. Below is structured research material about "{topic}".
 
@@ -618,24 +617,35 @@ Output a comprehensive research report with clear section headers."""})
                         rprint("[ERROR] Unload percentage must be between 0 and 100")
                         continue
 
-                    # Find the actual layer storage (not a @property)
+                    # Find actual writable layer storage
+                    parent, attr = None, None
+                    # Pattern: model.model.layers
                     inner = getattr(model, 'model', None)
-                    if inner is not None and hasattr(inner, 'layers') and not isinstance(
-                        getattr(type(inner), 'layers', None), property
-                    ):
+                    if inner is not None and hasattr(inner, 'layers') and not isinstance(getattr(type(inner), 'layers', None), property):
                         parent, attr = inner, 'layers'
-                    elif hasattr(model, 'layers') and not isinstance(
-                        getattr(type(model), 'layers', None), property
-                    ):
+                    # Pattern: model.language_model.model.layers
+                    if parent is None:
+                        lm = getattr(model, 'language_model', None)
+                        if lm is not None:
+                            inner2 = getattr(lm, 'model', None)
+                            if inner2 is not None and hasattr(inner2, 'layers') and not isinstance(getattr(type(inner2), 'layers', None), property):
+                                parent, attr = inner2, 'layers'
+                    # Pattern: model.transformer.layers
+                    if parent is None:
+                        tr = getattr(model, 'transformer', None)
+                        if tr is not None and hasattr(tr, 'layers') and not isinstance(getattr(type(tr), 'layers', None), property):
+                            parent, attr = tr, 'layers'
+                    # Pattern: model.layers (direct, non-property)
+                    if parent is None and hasattr(model, 'layers') and not isinstance(getattr(type(model), 'layers', None), property):
                         parent, attr = model, 'layers'
-                    else:
-                        rprint("[ERROR] Could not find writable model layers")
+
+                    if parent is None:
+                        rprint("[ERROR] Could not find writable model layers for this model type")
                         continue
 
                     layers = getattr(parent, attr)
                     n = len(layers)
 
-                    # Save original
                     if not hasattr(model, '_saved_layers'):
                         model._saved_layers = layers[:]
 
@@ -660,16 +670,23 @@ Output a comprehensive research report with clear section headers."""})
                     rprint("[INFO] No layers to reload")
                     continue
 
+                parent, attr = None, None
                 inner = getattr(model, 'model', None)
-                if inner is not None and hasattr(inner, 'layers') and not isinstance(
-                    getattr(type(inner), 'layers', None), property
-                ):
+                if inner is not None and hasattr(inner, 'layers') and not isinstance(getattr(type(inner), 'layers', None), property):
                     parent, attr = inner, 'layers'
-                elif hasattr(model, 'layers') and not isinstance(
-                    getattr(type(model), 'layers', None), property
-                ):
+                if parent is None:
+                    lm = getattr(model, 'language_model', None)
+                    if lm is not None:
+                        inner2 = getattr(lm, 'model', None)
+                        if inner2 is not None and hasattr(inner2, 'layers') and not isinstance(getattr(type(inner2), 'layers', None), property):
+                            parent, attr = inner2, 'layers'
+                if parent is None:
+                    tr = getattr(model, 'transformer', None)
+                    if tr is not None and hasattr(tr, 'layers') and not isinstance(getattr(type(tr), 'layers', None), property):
+                        parent, attr = tr, 'layers'
+                if parent is None and hasattr(model, 'layers') and not isinstance(getattr(type(model), 'layers', None), property):
                     parent, attr = model, 'layers'
-                else:
+                if parent is None:
                     rprint("[ERROR] Could not find writable model layers")
                     continue
 

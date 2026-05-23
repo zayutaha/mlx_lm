@@ -33,24 +33,42 @@ def _estimate_small_model_memory() -> float:
 
 
 def _find_layers(model):
-    """Find the actual layer storage (not a @property).
+    """Find the actual layer storage by trying common model patterns.
     
-    Returns (container_object, attr_name) where setattr works.
-    Many models have Model.layers as @property → Model.model.layers (real list).
+    Returns (container_object, attr_name) where setattr/slice works.
+    Models store layers in various places depending on architecture:
+    - model.model.layers (LLaMA, Mistral, etc.)
+    - model.language_model.model.layers (Qwen, Phi, etc.)
+    - model.layers (some models, if not a @property)
     """
-    # Check for the common inner transformer pattern
-    inner = getattr(model, 'model', None)
-    if inner is not None:
-        # Verify inner.layers is NOT a property
-        if hasattr(inner, 'layers') and not isinstance(
-            getattr(type(inner), 'layers', None), property
-        ):
-            return inner, 'layers'
-    # Direct layers attribute (non-property)
-    if hasattr(model, 'layers') and not isinstance(
-        getattr(type(model), 'layers', None), property
-    ):
-        return model, 'layers'
+    patterns = [
+        # Pattern 1: model.model.layers
+        (['model', 'layers'], lambda m: getattr(getattr(m, 'model', None), 'layers', None)),
+        # Pattern 2: model.language_model.model.layers
+        (['language_model', 'model', 'layers'], lambda m: getattr(
+            getattr(getattr(m, 'language_model', None), 'model', None), 'layers', None)),
+        # Pattern 3: model.layers directly (if not @property)
+        (['layers'], lambda m: getattr(m, 'layers', None) if not isinstance(
+            getattr(type(m), 'layers', None), property) else None),
+        # Pattern 4: model.transformer.layers
+        (['transformer', 'layers'], lambda m: getattr(getattr(m, 'transformer', None), 'layers', None)),
+    ]
+
+    for pattern_name, getter in patterns:
+        result = getter(model)
+        if result is not None:
+            # Navigate to the parent of 'layers'
+            path = pattern_name
+            obj = model
+            for step in path[:-1]:  # Navigate to the parent
+                obj = getattr(obj, step, None)
+                if obj is None:
+                    break
+            else:
+                # Verify layers is not a @property on the actual container
+                if not isinstance(getattr(type(obj), 'layers', None), property):
+                    return obj, 'layers'
+
     return None, None
 
 
@@ -63,36 +81,25 @@ def unload_for_small_model(main_model) -> callable:
         return lambda: None
 
     parent, attr = _find_layers(main_model)
-    if parent is None:
-        return lambda: None
+    if parent is not None:
+        layers = getattr(parent, attr)
+        if layers:
+            if not hasattr(main_model, '_saved_layers'):
+                main_model._saved_layers = layers[:]
 
-    layers = getattr(parent, attr)
-    if not layers:
-        return lambda: None
+            main_mem = _estimate_model_memory(main_model)
+            small_mem = _estimate_small_model_memory()
+            context_mem = 0.5
+            needed = small_mem + context_mem
 
-    # Save original
-    if not hasattr(main_model, '_saved_layers'):
-        main_model._saved_layers = layers[:]
+            n = len(layers)
+            if main_mem > needed and n > 1:
+                mem_per_layer = main_mem / n
+                layers_to_free = int(needed / mem_per_layer) + 1
+                layers_to_keep = max(1, n - layers_to_free)
+                setattr(parent, attr, layers[:layers_to_keep])
 
-    # Calculate how much to free
-    main_mem = _estimate_model_memory(main_model)
-    small_mem = _estimate_small_model_memory()
-    context_mem = 0.5  # ~500MB for Qwen context
-    needed = small_mem + context_mem
-
-    n = len(layers)
-    if main_mem <= needed or n <= 1:
-        # Already small enough, or can't unload further
-        return lambda: _restore_layers(main_model)
-
-    # Each layer = main_mem / n
-    mem_per_layer = main_mem / n
-    layers_to_free = int(needed / mem_per_layer) + 1  # +1 for safety
-    layers_to_keep = max(1, n - layers_to_free)
-    layers_to_drop = n - layers_to_keep
-
-    # Truncate
-    setattr(parent, attr, layers[:layers_to_keep])
+    # Always free cache memory, even if we couldn't find layers
     gc.collect()
     if hasattr(mx, 'metal') and hasattr(mx.metal, 'clear_cache'):
         mx.metal.clear_cache()
