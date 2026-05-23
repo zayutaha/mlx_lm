@@ -618,34 +618,38 @@ Output a comprehensive research report with clear section headers."""})
                         rprint("[ERROR] Unload percentage must be between 0 and 100")
                         continue
 
-                    # Find layer list (common patterns: model.model.layers, model.layers)
-                    layers = getattr(getattr(model, 'model', None), 'layers',
-                                     getattr(model, 'layers', None))
-                    if layers is None:
-                        rprint("[ERROR] Could not find model layers")
+                    # Find the actual layer storage (not a @property)
+                    inner = getattr(model, 'model', None)
+                    if inner is not None and hasattr(inner, 'layers') and not isinstance(
+                        getattr(type(inner), 'layers', None), property
+                    ):
+                        parent, attr = inner, 'layers'
+                    elif hasattr(model, 'layers') and not isinstance(
+                        getattr(type(model), 'layers', None), property
+                    ):
+                        parent, attr = model, 'layers'
+                    else:
+                        rprint("[ERROR] Could not find writable model layers")
                         continue
 
-                    # Save original layers on first unload
+                    layers = getattr(parent, attr)
+                    n = len(layers)
+
+                    # Save original
                     if not hasattr(model, '_saved_layers'):
                         model._saved_layers = layers[:]
 
-                    n = len(layers)
                     to_drop = max(1, int(n * unload_pct / 100))
                     kept = n - to_drop
-
-                    # Truncate in-place
-                    if hasattr(model, 'model') and hasattr(model.model, 'layers'):
-                        model.model.layers = layers[:kept]
-                    else:
-                        model.layers = layers[:kept]
+                    setattr(parent, attr, layers[:kept])
 
                     gc.collect()
                     if hasattr(mx, 'metal') and hasattr(mx.metal, 'clear_cache'):
                         mx.metal.clear_cache()
 
-                    before = mx.get_active_memory() / 1e9
+                    after = mx.get_active_memory() / 1e9
                     rprint(f"[INFO] Unloaded {to_drop}/{n} layers ({unload_pct}%). "
-                           f"Active memory: {before:.2f} GB")
+                           f"Active memory: {after:.2f} GB")
                 except ValueError:
                     rprint("[ERROR] Usage: /unload <percentage>")
                 continue
@@ -656,17 +660,20 @@ Output a comprehensive research report with clear section headers."""})
                     rprint("[INFO] No layers to reload")
                     continue
 
-                layers = getattr(getattr(model, 'model', None), 'layers',
-                                 getattr(model, 'layers', None))
-                if layers is None:
-                    rprint("[ERROR] Could not find model layers")
+                inner = getattr(model, 'model', None)
+                if inner is not None and hasattr(inner, 'layers') and not isinstance(
+                    getattr(type(inner), 'layers', None), property
+                ):
+                    parent, attr = inner, 'layers'
+                elif hasattr(model, 'layers') and not isinstance(
+                    getattr(type(model), 'layers', None), property
+                ):
+                    parent, attr = model, 'layers'
+                else:
+                    rprint("[ERROR] Could not find writable model layers")
                     continue
 
-                if hasattr(model, 'model') and hasattr(model.model, 'layers'):
-                    model.model.layers = saved
-                else:
-                    model.layers = saved
-
+                setattr(parent, attr, saved)
                 del model._saved_layers
                 rprint("[INFO] All layers restored")
             

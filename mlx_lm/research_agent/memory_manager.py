@@ -33,11 +33,23 @@ def _estimate_small_model_memory() -> float:
 
 
 def _find_layers(model):
-    """Find the layer list in a model."""
+    """Find the actual layer storage (not a @property).
+    
+    Returns (container_object, attr_name) where setattr works.
+    Many models have Model.layers as @property → Model.model.layers (real list).
+    """
+    # Check for the common inner transformer pattern
     inner = getattr(model, 'model', None)
-    if inner is not None and hasattr(inner, 'layers'):
-        return inner, 'layers'
-    if hasattr(model, 'layers'):
+    if inner is not None:
+        # Verify inner.layers is NOT a property
+        if hasattr(inner, 'layers') and not isinstance(
+            getattr(type(inner), 'layers', None), property
+        ):
+            return inner, 'layers'
+    # Direct layers attribute (non-property)
+    if hasattr(model, 'layers') and not isinstance(
+        getattr(type(model), 'layers', None), property
+    ):
         return model, 'layers'
     return None, None
 
