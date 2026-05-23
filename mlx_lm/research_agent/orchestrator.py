@@ -130,16 +130,16 @@ def run_research(topic: str, model, tokenizer, args,
                     "content": content,
                 })
 
-        # 6. Normalize (optional enhancement) — then build context with RAW content
+        # 6. Unload small model — restore full big model before normalization
+        set_small_model(None)
+        small.unload()
+
+        # 7. Normalize using the fully restored big model
         normalized = normalize_docs(
             scraped_docs, model, tokenizer, args, chat_template_kwargs
         )
 
-        # Unload small model before synthesis to free memory
-        set_small_model(None)
-        small.unload()
-
-        # 7. Build context package for big model
+        # 8. Build context package for big model synthesis
         context_section = ""
         for i, nd in enumerate(normalized):
             context_section += f"\n## {nd['title']}\n"
