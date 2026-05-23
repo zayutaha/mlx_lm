@@ -771,6 +771,18 @@ Output a comprehensive research report with clear section headers."""})
             rprint()
         if last_response and not stop_generation:
             message_history.append({"role": "assistant", "content": response_text})
+            
+            # Log research output to file
+            if message_history and message_history[-2].get("content", "").startswith("Research:"):
+                import datetime as _dt
+                _rpath = f"/tmp/mlx_research_output_{_dt.datetime.now():%Y%m%d_%H%M%S}.log"
+                try:
+                    with open(_rpath, "w") as _f:
+                        _f.write(response_text)
+                    rprint(f"[INFO] Research output logged to {_rpath}")
+                except Exception:
+                    pass
+            
             rprint(
                 f"[INFO] Generated {last_response.generation_tokens} tokens "
                 f"at {last_response.generation_tps:.2f} tokens/sec "
