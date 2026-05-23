@@ -610,15 +610,20 @@ def main():
                         rprint("[ERROR] No content could be scraped.")
                         continue
 
-                    # ── Pass 3: Generate final answer ──
+                    # ── Pass 3: Generate final reference document ──
                     messages = []
                     if current_system_prompt is not None:
                         messages.append({"role": "system", "content": current_system_prompt})
-                    messages.append({"role": "user", "content": f"""Based ONLY on the search results below, answer the question. Cite sources. If the results are not about the question, say so.
+                    messages.append({"role": "user", "content": f"""Format the following search results into a clean reference document about "{search_query}". 
 
-Question: {search_query}
+Rules:
+- Remove all navigation, boilerplate, references, categories, ads
+- Keep only substantive information relevant to the topic
+- Organize into clear sections if multiple topics emerge
+- Preserve key facts, dates, names, numbers
+- Output only the clean reference document
 
-Search results:
+Raw material:
 {search_context}"""})
                     
                     # Log search context to file
