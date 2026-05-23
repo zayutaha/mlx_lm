@@ -57,8 +57,7 @@ class SmallModelManager:
         self.tokenizer = None
         self._loaded = False
         gc.collect()
-        if hasattr(mx, 'metal') and hasattr(mx.metal, 'clear_cache'):
-            mx.metal.clear_cache()
+        mx.clear_cache()
         self._restore()
 
     def call(self, messages, max_tokens, temp=0.0):

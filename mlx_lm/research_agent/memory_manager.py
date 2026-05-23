@@ -92,8 +92,7 @@ def unload_for_small_model(main_model) -> callable:
 
     # Always free cache memory, even if we couldn't find layers
     gc.collect()
-    if hasattr(mx, 'metal') and hasattr(mx.metal, 'clear_cache'):
-        mx.metal.clear_cache()
+    mx.clear_cache()
 
     def restore():
         _restore_layers(main_model)

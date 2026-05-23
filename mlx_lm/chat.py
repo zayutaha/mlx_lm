@@ -660,8 +660,7 @@ Output the full research report now. Be extremely detailed — write pages, not 
                 kept = n - to_drop
                 setattr(parent, attr, layers[:kept])
                 gc.collect()
-                if hasattr(mx, 'metal') and hasattr(mx.metal, 'clear_cache'):
-                    mx.metal.clear_cache()
+                mx.clear_cache()
                 after = mx.get_active_memory() / 1e9
                 rprint(f"[INFO] Unloaded {to_drop}/{n} layers ({unload_pct}%). "
                        f"Active memory: {after:.2f} GB")
