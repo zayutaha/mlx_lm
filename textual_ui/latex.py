@@ -78,6 +78,7 @@ def format_for_display(text: str) -> str:
 
 
 def strip_prompt_markers(text: str) -> str:
+    text = re.sub(r'\[INFO\].*', '', text)
     lines = text.splitlines()
-    clean = [l for l in lines if not l.startswith("[INFO]")]
+    clean = [l for l in lines if l.strip()]
     return "\n".join(clean).strip()

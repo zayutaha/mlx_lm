@@ -97,25 +97,21 @@ async def run_model_stream(chat, port, user_text: str):
     except Exception:
         if chat._on_crash:
             await chat._on_crash()
-        return
-
-    if chat.interrupted:
-        display = _remove_thinking_blocks(strip_prompt_markers(buf)) + "\n\n*— stopped*"
-        chat.interrupted = False
-    elif in_thinking or explicit_thinking:
-        display = _remove_thinking_blocks(strip_prompt_markers(get_display_text(buf)))
-    else:
-        display = _remove_thinking_blocks(strip_prompt_markers(buf))
-
-    try:
-        await chat.handle_stream_finished(format_for_display(display))
-    except Exception:
-        pass
-
-    scroll_y = chat_widget.scroll_offset.y
-    virtual_h = chat_widget.virtual_size.height
-    widget_h = chat_widget.region.height
-    if virtual_h <= widget_h or (virtual_h - widget_h - scroll_y) <= 50:
-        chat_widget.scroll_end(animate=False)
-
-    chat._set_busy(False)
+    finally:
+        if chat.interrupted:
+            display = _remove_thinking_blocks(strip_prompt_markers(buf)) + "\n\n*— stopped*"
+            chat.interrupted = False
+        elif in_thinking or explicit_thinking:
+            display = _remove_thinking_blocks(strip_prompt_markers(get_display_text(buf)))
+        else:
+            display = _remove_thinking_blocks(strip_prompt_markers(buf))
+        try:
+            await chat.handle_stream_finished(format_for_display(display))
+        except Exception:
+            pass
+        scroll_y = chat_widget.scroll_offset.y
+        virtual_h = chat_widget.virtual_size.height
+        widget_h = chat_widget.region.height
+        if virtual_h <= widget_h or (virtual_h - widget_h - scroll_y) <= 50:
+            chat_widget.scroll_end(animate=False)
+        chat._set_busy(False)
