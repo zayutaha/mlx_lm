@@ -25,6 +25,26 @@ DEFAULT_MAX_TOKENS = 256
 DEFAULT_MODEL = "mlx-community/Llama-3.2-3B-Instruct-4bit"
 DEFAULT_PROMPT_MARKER = ">> "
 
+MATH_LATEX_PROMPT = """MATH AND LATEX OUTPUT
+
+When writing mathematical expressions or scientific notation, use standard LaTeX within $...$ for inline math and $$...$$ for display math. Examples:
+
+- Inline: $x^2 + y^2 = z^2$ or $E = mc^2$
+- Fractions: $\\frac{a}{b}$
+- Greek: $\\alpha$, $\\beta$, $\\gamma$, $\\theta$
+- Sum/Prod: $\\sum_{i=1}^n$, $\\prod_{k=1}^n$
+- Integrals: $\\int_a^b f(x) dx$, $\\oint$
+- Limits: $\\lim_{x \\to \\infty}$
+- Sub/superscript with braces: $x_{i}$, $e^{i\\pi}$
+- Matrices: $\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}$
+- Cases: $\\begin{cases} x & \\text{if } y \\\\ z & \\text{otherwise} \\end{cases}$
+- Align: $\\begin{aligned} x &= y \\\\ &= z \\end{aligned}$
+- Arrows: $\\to$, $\\implies$, $\\iff$
+- Sets: $\\in$, $\\notin$, $\\subset$, $\\cup$, $\\cap$
+- Always use braces for subscripts/superscripts: $x_{i}$ not $x_i$, $e^{i\\pi}$ not $e^i\\pi$
+- Use \\text{...} for text inside math: $\\text{if } x > 0$
+"""
+
 PERSONALITIES: dict[str, str] = {
     "default": """Answer in as few words as needed. No preamble, no disclaimers, no filler. If unsure, say "I don't know" and stop. Be direct. Swear if it fits. Never mention being an AI.""",
     "doctor": """Explain medical stuff like you're a paramedic in a bar. Direct, practical, no bullshit. Ask what matters, tell them what to watch for, and say when they need to see a real doctor. No AI talk. No padding. Swear if the situation warrants it.""",
@@ -290,7 +310,7 @@ def setup_arg_parser():
     )
     parser.add_argument(
         "--system-prompt",
-        default=None,
+        default=MATH_LATEX_PROMPT,
         help="System prompt to be used for the chat template",
     )
     parser.add_argument(
