@@ -11,6 +11,7 @@ from mlx_lm.models.turboquant_rotation import random_diagonal_sign
 from mlx_lm.models.turboquant_packing import pack_indices, unpack_indices, packed_dim, VALS_PER_WORD
 from mlx_lm.models.turboquant_metal import fused_quantize, dequant_fp16
 from mlx_lm.models.turboquant_kernels import packed_dequantize
+from mlx_lm.models.turboquant_fused import fused_decode_attention
 
 
 def _compute_gaussian_codebook(bits):
@@ -241,6 +242,9 @@ class TurboQuantKVCache:
         c._deq_offset = 0
         c._deq_alloc = 0
         return c
+
+    def decode_attention(self, queries):
+        return fused_decode_attention(queries, self.k_packed, self.k_norms, self.v_packed, self.v_norms, self._k_q.centroids, self._k_q.signs, self._v_q.signs, self.quant_bits, self._k_dim)
 
     def is_trimmable(self):
         return True
