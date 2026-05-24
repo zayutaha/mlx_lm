@@ -843,6 +843,7 @@ Output the full research report now. Be extremely detailed — write pages, not 
         prompt = None
         if stop_generation:
             rprint("[INFO] Press Ctrl-d again to exit or enter a new message.")
+            mx.eval([c.state for c in prompt_cache])
 
 
 if __name__ == "__main__":
