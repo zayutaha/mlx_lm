@@ -1,6 +1,7 @@
 # Copyright © 2023-2024 Apple Inc.
 
 import argparse
+import gc
 import json
 import os
 import select
@@ -24,49 +25,10 @@ DEFAULT_MAX_TOKENS = 256
 DEFAULT_MODEL = "mlx-community/Llama-3.2-3B-Instruct-4bit"
 DEFAULT_PROMPT_MARKER = ">> "
 
-# Personality definitions
-BASE_STYLE_PROMPT = """AI PERSONA AND STYLE GUIDELINES
-
-CORE TONE AND VOICE
-
-Directness: Answer the point immediately. No warmup, no stage-setting, no fake enthusiasm, no recap headers, no "great question", no "here's the summary".
-
-Human-Centric Flow: Write like a sharp person with opinions and domain knowledge, not a corporate assistant. Keep the prose natural, compact, and specific.
-
-Minimalist Punctuation: Do not use em-dashes unless they are genuinely needed for grammar.
-
-ENGAGEMENT RULES
-
-No AI Disclaimers: Never say "as an AI", "I am an AI", or anything similar.
-
-No Filler: Do not pad with obvious caveats, softeners, or generic safety boilerplate. If something is uncertain, say what is uncertain and move on.
-
-Language: Casual profanity is allowed when it fits the tone. Avoid sounding sanitized."""
-
 PERSONALITIES: dict[str, str] = {
-    "default": f"""{BASE_STYLE_PROMPT}
-
-Default behavior: Answer the exact question first and stay on the main point. Do not wander into side notes, optional background, summaries, or extra advice unless the user asks for it. If the user wants an opinion, give one plainly instead of dodging into fake neutrality or trying to steer them away from it. Do what the user asks, be competent about it, and don't dodge the work. Sound like an annoyed human who still knows what they're doing: mildly unwilling, impatient, and put-upon, but still clear and useful. You may use occasional Deadpool-style jokes or snark when it fits, but do not let the bit take over the answer. Be blunt, direct, and efficient. Cut the bullshit and answer cleanly.""",
-    "doctor": f"""{BASE_STYLE_PROMPT}
-
-Role: You are a doctor-like medical explainer, not a customer support bot.
-
-Behavior:
-- Start by asking the most relevant clarifying questions before acting confident, unless the user is clearly asking for general background information.
-- Triage first: duration, severity, age, meds, conditions, triggers, red flags.
-- Be practical and concise.
-- Push the user toward the medically responsible choice when the facts support it. If they're being reckless, say so plainly and lean on them to stop doing dumb shit.
-- Do not moralize or act robotic.
-- Swear lightly when it fits, but stay clinically useful.""",
-    "historian": f"""{BASE_STYLE_PROMPT}
-
-Role: You are a historian with strong interpretive judgment.
-
-Behavior:
-- Have an opinion when the evidence supports one. Do not hide behind fake neutrality.
-- Explain what mattered, who had leverage, and what the downstream consequences were.
-- Call bad strategy, propaganda, or delusion what it was when warranted.
-- Swear a bit more freely than default when emphasis helps, but keep the analysis sharp.""",
+    "default": """Answer in as few words as needed. No preamble, no disclaimers, no filler. If unsure, say "I don't know" and stop. Be direct. Swear if it fits. Never mention being an AI.""",
+    "doctor": """Explain medical stuff like you're a paramedic in a bar. Direct, practical, no bullshit. Ask what matters, tell them what to watch for, and say when they need to see a real doctor. No AI talk. No padding. Swear if the situation warrants it.""",
+    "historian": """Tell history like you're recounting it to a friend over drinks. Focus on the people, the decisions, the luck, and the fuck-ups. Big themes, not just dates. Analogies to now are fine if they land. No "objectively speaking" or "it's complicated" cop-outs.""",
 }
 
 
@@ -441,6 +403,12 @@ def main():
         rprint("- 'h' to display these commands")
         rprint("- '/think <message>' to enable thinking mode for that message")
         rprint(f"- '/personality_set <name>' to change personality (available: {', '.join(PERSONALITIES.keys())})")
+        rprint("- '/search <query>' to search the web and generate a response")
+        rprint("- '/research <topic>' to research a topic in-depth (8 pages, detailed report)")
+        rprint("- '/memory' to show current GPU memory usage")
+        rprint("- '/unload <pct>' to unload N% of model layers")
+        rprint("- '/reload' to reload all previously unloaded layers")
+        rprint("- '/mtp' to toggle multi-token prediction on/off")
 
     rprint(f"[INFO] Starting chat session with {args.model}.")
     print_help()
@@ -515,11 +483,236 @@ def main():
                     available = ", ".join(PERSONALITIES.keys())
                     rprint(f"[ERROR] Unknown personality. Available: {available}")
                 continue
+            
+            # Handle /memory command - show GPU memory usage
+            if query == "/memory":
+                rprint("[INFO] Memory stats")
+                cache_mem = mx.get_cache_memory() / 1e9
+                peak_mem = mx.get_peak_memory() / 1e9
+                rprint(f"[INFO] Cache memory: {cache_mem:.2f} GB | Peak memory: {peak_mem:.2f} GB")
+                continue
+            
+            # Handle /search — quick web answer
+            if query.startswith("/search "):
+                search_query = query[8:].strip()
+                if not search_query:
+                    rprint("[ERROR] Usage: /search <query>")
+                    continue
+                try:
+                    from .web_search import search_web, scrape_url, is_relevant
+
+                    # Generate 3 queries
+                    rprint("[INFO] Generating search queries...")
+                    qgen_messages = [
+                        {"role": "system", "content": "You are a search query generator. Given a question, output 3 concise web search queries on separate lines. Each query must cover a different angle. Use proper names and keywords. Do NOT number. Do NOT explain.\n\nExample:\nQuestion: what happened to elon musk?\nOutput:\nelon musk news 2026\nelon musk latest updates\nelon musk biography history"},
+                        {"role": "user", "content": f"Question: {search_query}\nOutput:"},
+                    ]
+                    qgen_prompt = tokenizer.apply_chat_template(
+                        qgen_messages, add_generation_prompt=True, add_special_tokens=True, **chat_template_kwargs,
+                    )
+                    qgen_cache = make_prompt_cache(model, args.max_kv_size, turbo_kv_bits=args.turbo_kv_bits, turbo_fp16_layers=args.turbo_fp16_layers)
+                    qgen_sampler = make_sampler(args.temp, args.top_p, top_k=args.top_k, xtc_threshold=args.xtc_threshold, xtc_probability=args.xtc_probability, xtc_special_tokens=(tokenizer.encode("\n") + list(tokenizer.eos_token_ids)))
+                    qgen_text = ""
+                    for resp in stream_generate(model, tokenizer, qgen_prompt, max_tokens=256, sampler=qgen_sampler, prompt_cache=qgen_cache, turbo_kv_bits=args.turbo_kv_bits, turbo_fp16_layers=args.turbo_fp16_layers, kv_bits=args.kv_bits, kv_group_size=args.kv_group_size, quantized_kv_start=args.quantized_kv_start, mtp=args.mtp, prefill_step_size=args.prefill_step_size):
+                        qgen_text += resp.text
+                    queries = [l.strip().lstrip("0123456789.)- ") for l in qgen_text.splitlines() if l.strip() and len(l.strip()) > 3][:3]
+                    if not queries:
+                        queries = [search_query]
+                    if search_query not in queries:
+                        queries.append(search_query)
+
+                    # Search + scrape 3 pages
+                    search_context = ""
+                    seen_urls = set()
+                    for q in queries:
+                        rprint(f"[INFO] Searching: {q}")
+                        for result in search_web(q, num_results=5):
+                            url = result.get("url", "")
+                            title = result.get("title", "")
+                            if url and url not in seen_urls and is_relevant(title, result.get("snippet", ""), search_query):
+                                seen_urls.add(url)
+                                rprint(f"  -> scraping: {title}")
+                                scraped = scrape_url(url)
+                                if scraped:
+                                    search_context += f"## {title}\nSource: {url}\n\n{scraped}\n\n---\n\n"
+                                break
+
+                    if not search_context:
+                        rprint("[ERROR] No content could be scraped.")
+                        continue
+
+                    messages = []
+                    if current_system_prompt is not None:
+                        messages.append({"role": "system", "content": current_system_prompt})
+                    messages.append({"role": "user", "content": f"Based on the search results below, provide a concise answer to: {search_query}\n\n{search_context}"})
+
+                    import datetime as _dt
+                    _logpath = f"/tmp/mlx_search_{_dt.datetime.now():%Y%m%d_%H%M%S}.log"
+                    with open(_logpath, "w") as _f:
+                        _f.write(messages[-1]["content"])
+                    rprint(f"[INFO] Context logged to {_logpath}")
+
+                    message_history.append({"role": "user", "content": search_query})
+                    prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True, add_special_tokens=True, **chat_template_kwargs)
+                    rprint("[INFO] Generating answer...\n")
+                    continue
+                except Exception as e:
+                    rprint(f"[ERROR] Search failed: {str(e)}")
+                    continue
+
+            # Handle /research — deep context research via research_agent
+            if query.startswith("/research "):
+                topic = query[10:].strip()
+                if not topic:
+                    rprint("[ERROR] Usage: /research <topic>")
+                    continue
+                try:
+                    from mlx_lm.research_agent.orchestrator import run_research
+
+                    rprint(f"[INFO] Researching: {topic}")
+                    result = run_research(
+                        topic=topic, model=model, tokenizer=tokenizer,
+                        args=args, chat_template_kwargs=chat_template_kwargs,
+                    )
+
+                    coverage_pct = int(result["coverage"].get("overview", 0) * 100) if "overview" in result["coverage"] else int(sum(result["coverage"].values()) / max(1, len(result["coverage"])) * 100)
+                    rprint(f"[INFO] Research complete: {result['num_sources']} sources, coverage ~{coverage_pct}%")
+
+                    # Build big model prompt with context
+                    sys_parts = []
+                    if current_system_prompt is not None:
+                        sys_parts.append(current_system_prompt)
+                    sys_parts.append(f"The following research context about \"{topic}\" was gathered from web sources. Use it to inform your responses throughout this conversation.")
+                    messages = [{"role": "system", "content": "\n\n".join(sys_parts)}]
+
+                    messages.append({"role": "user", "content": f"""You are a research synthesis engine. Below is structured research material about "{topic}".
+
+Your task: Generate a massively detailed research report. This report must be EXHAUSTIVE — cover every possible detail someone might want to know.
+
+Rules:
+- Extract ALL facts, dates, names, numbers, statistics from the material
+- Cover every dimension in depth: {', '.join(result['dimensions'])}
+- Include background context, key events, chronology
+- Note controversies, criticisms, different perspectives
+- Include specific quotes, data points, source references
+- Organize into clear sections with subsections
+- The report should be LONG and THOROUGH — do not summarize, do not condense
+- If the source material is thin on a dimension, state what's known and note the gap
+
+Sources analyzed: {result['num_sources']}
+
+Research material:
+{result['context_section']}
+
+Output the full research report now. Be extremely detailed — write pages, not paragraphs."""})
+
+                    import datetime as _dt
+                    _logpath = f"/tmp/mlx_research_{_dt.datetime.now():%Y%m%d_%H%M%S}.log"
+                    with open(_logpath, "w") as _f:
+                        _f.write(messages[-1]["content"])
+                    rprint(f"[INFO] Research context logged to {_logpath}")
+
+                    message_history.append({"role": "user", "content": f"Research: {topic}"})
+                    prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True, add_special_tokens=True, **chat_template_kwargs)
+                    # Disable MTP for research synthesis — re-enabled after generation
+                    model._saved_mtp = args.mtp
+                    args.mtp = False
+                    rprint("[INFO] Synthesizing research report...\n")
+                    continue
+                except Exception as e:
+                    rprint(f"[ERROR] Research failed: {str(e)}")
+                    continue
+            elif query.startswith("/unload "):
+                try:
+                    unload_pct = int(query[8:].strip())
+                except ValueError:
+                    rprint("[ERROR] Usage: /unload <percentage>")
+                    continue
+                if not (0 <= unload_pct <= 100):
+                    rprint("[ERROR] Unload percentage must be between 0 and 100")
+                    continue
+
+                # Find actual writable layer storage
+                parent, attr = None, None
+                for src_name, src_obj in [('model', model), ('language_model', getattr(model, 'language_model', None))]:
+                    if src_obj is None:
+                        continue
+                    inner = getattr(src_obj, 'model', None)
+                    if inner is not None and hasattr(inner, 'layers') and not isinstance(getattr(type(inner), 'layers', None), property):
+                        parent, attr = inner, 'layers'
+                        break
+                if parent is None:
+                    tr = getattr(model, 'transformer', None)
+                    if tr is not None and hasattr(tr, 'layers') and not isinstance(getattr(type(tr), 'layers', None), property):
+                        parent, attr = tr, 'layers'
+                if parent is None and hasattr(model, 'layers') and not isinstance(getattr(type(model), 'layers', None), property):
+                    parent, attr = model, 'layers'
+
+                if parent is None:
+                    rprint(f"[ERROR] Could not find writable layers for {type(model).__name__}")
+                    continue
+
+                layers = getattr(parent, attr)
+                n = len(layers)
+                if not hasattr(model, '_saved_layers'):
+                    model._saved_layers = layers[:]
+                to_drop = max(1, int(n * unload_pct / 100))
+                kept = n - to_drop
+                setattr(parent, attr, layers[:kept])
+                gc.collect()
+                mx.clear_cache()
+                after = mx.get_active_memory() / 1e9
+                rprint(f"[INFO] Unloaded {to_drop}/{n} layers ({unload_pct}%). "
+                       f"Active memory: {after:.2f} GB")
+                continue
+
+            elif query == "/reload":
+                saved = getattr(model, '_saved_layers', None)
+                if saved is None:
+                    rprint("[INFO] No layers to reload")
+                    continue
+
+                parent, attr = None, None
+                for src_name, src_obj in [('model', model), ('language_model', getattr(model, 'language_model', None))]:
+                    if src_obj is None:
+                        continue
+                    inner = getattr(src_obj, 'model', None)
+                    if inner is not None and hasattr(inner, 'layers') and not isinstance(getattr(type(inner), 'layers', None), property):
+                        parent, attr = inner, 'layers'
+                        break
+                if parent is None:
+                    tr = getattr(model, 'transformer', None)
+                    if tr is not None and hasattr(tr, 'layers') and not isinstance(getattr(type(tr), 'layers', None), property):
+                        parent, attr = tr, 'layers'
+                if parent is None and hasattr(model, 'layers') and not isinstance(getattr(type(model), 'layers', None), property):
+                    parent, attr = model, 'layers'
+                if parent is None:
+                    rprint("[ERROR] Could not find writable model layers")
+                    continue
+
+                setattr(parent, attr, saved)
+                del model._saved_layers
+                rprint("[INFO] All layers restored")
+            
+            # Handle /mtp toggle
+            if query == "/mtp":
+                # Check if model has MTP support
+                has_mtp = hasattr(getattr(model, 'model', None), 'mtp') or \
+                          hasattr(getattr(model, 'language_model', None), 'mtp')
+                if not has_mtp:
+                    rprint("[INFO] This model does not support MTP")
+                    continue
+                args.mtp = not args.mtp
+                rprint(f"[INFO] MTP {'enabled' if args.mtp else 'disabled'}")
+                continue
+            
             # Check for /think prefix to enable thinking for this message
             thinking_kwargs = dict(chat_template_kwargs)
+            used_thinking = False
             if query.startswith("/think"):
                 query = query[6:].lstrip()
                 thinking_kwargs["enable_thinking"] = True
+                used_thinking = True
             else:
                 thinking_kwargs["enable_thinking"] = False
 
@@ -590,11 +783,39 @@ def main():
             rprint()
         if last_response and not stop_generation:
             message_history.append({"role": "assistant", "content": response_text})
+            
+            # Log research output to file
+            if message_history and message_history[-2].get("content", "").startswith("Research:"):
+                import datetime as _dt
+                _rpath = f"/tmp/mlx_research_output_{_dt.datetime.now():%Y%m%d_%H%M%S}.log"
+                try:
+                    with open(_rpath, "w") as _f:
+                        _f.write(response_text)
+                    rprint(f"[INFO] Research output logged to {_rpath}")
+                except Exception:
+                    pass
+
+            # Restore MTP after research synthesis
+            saved_mtp = getattr(model, '_saved_mtp', None)
+            if saved_mtp is not None:
+                args.mtp = saved_mtp
+                del model._saved_mtp
+            
             rprint(
                 f"[INFO] Generated {last_response.generation_tokens} tokens "
                 f"at {last_response.generation_tps:.2f} tokens/sec "
                 f"(peak memory: {last_response.peak_memory:.2f} GB)"
             )
+            
+            # If thinking was used, reset the prompt cache to avoid state leakage
+            if used_thinking:
+                prompt_cache = make_prompt_cache(
+                    model,
+                    args.max_kv_size,
+                    turbo_kv_bits=args.turbo_kv_bits,
+                    turbo_fp16_layers=args.turbo_fp16_layers,
+                )
+                rprint("[INFO] Thinking cache cleared.")
 
         prompt = None
         if stop_generation:

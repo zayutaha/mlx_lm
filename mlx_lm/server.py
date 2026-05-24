@@ -462,7 +462,6 @@ class ModelProvider:
         model_key = (model_path, adapter_path, draft_model_path)
         if self.model_key != model_key:
             self._load(*model_key)
-        if self.draft_model is None and not getattr(cli_args, "no_batch", False):
         if self.draft_model is None and not getattr(self.cli_args, "no_batch", False):
             self.is_batchable = all(
                 hasattr(c, "merge")
@@ -783,7 +782,8 @@ class ResponseGenerator:
         # Local thread stream that we 'll pass to the BatchGenerator to make
         # sure that all generation runs in the same stream as the
         # synchronization messages.
-        generation_stream = mx.default_stream(mx.default_device())
+        global generation_stream
+        local_stream = mx.default_stream(mx.default_device())
 
         # Load the default model if it is given
         self.model_provider.load_default()
@@ -791,11 +791,6 @@ class ResponseGenerator:
         # MLX streams are thread-local; the module-level stream was
         # created in the main thread and is not available here.
         # Bind the generation stream to this thread.
-        # Module-level generation_stream was created during import on
-        # the main thread. MLX requires streams to be used on the
-        # thread that owns them. Create a fresh stream here and
-        # update all references (same approach as vllm-mlx).
-        global generation_stream
         import mlx_lm.generate as _gen_mod
 
         new_stream = mx.new_stream(mx.default_device())
@@ -803,7 +798,6 @@ class ResponseGenerator:
         generation_stream = new_stream           # server.py's reference
         _gen_mod.generation_stream = new_stream  # generate.py's reference
 
->>>>>>> 02c85d5 (Run generation on main thread, HTTP server in background)
         current_model = None
         current_sampling = None
         current_tokenizer = None
@@ -820,7 +814,6 @@ class ResponseGenerator:
             else:
                 return self._next_request(timeout)
 
-=======
         def progress_callback(info):
             for uid, processed, total in info:
                 if uid in batch_results:
@@ -890,16 +883,6 @@ class ResponseGenerator:
                     cache, rest = self.prompt_cache.fetch_nearest_cache(
                         current_model_key, prompt
                     )
-<<<<<<< HEAD
-                    prompt_cache_count = len(prompt) - len(rest)
-                    N = prompt_cache_count
-                    while N > 0:
-                        if N >= len(segments[0]):
-                            N -= len(segments.pop(0))
-                            segment_types.pop(0)
-                        else:
-                            segments[0] = segments[0][N:]
-                            break
                     ctx.prompt_cache_count = len(prompt) - len(rest)
                     if cache is None or not cache:
                         try:
@@ -1065,11 +1048,6 @@ class ResponseGenerator:
 
                         if r.finish_reason is not None:
                             result["rqueue"].put(None)
-                            self.prompt_cache.insert_cache(
-                                current_model_key,
-                                r.all_tokens[:],
-                                r.prompt_cache,
-                                cache_type="assistant",
                             self._store_cache(
                                 current_model_key, result["cache_key"], r.prompt_cache
                             )

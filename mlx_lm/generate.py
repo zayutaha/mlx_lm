@@ -5,12 +5,8 @@ import contextlib
 import copy
 import functools
 import json
-import logging
-import math
-import random
 import sys
 import time
-import warnings
 from collections import deque
 from dataclasses import dataclass
 from functools import partial
@@ -212,20 +208,6 @@ def setup_arg_parser():
         default=DEFAULT_QUANTIZED_KV_START,
     )
     parser.add_argument(
-        "--turbo-kv-bits",
-        type=int,
-        help="TurboQuant KV cache compression bits (1-4). "
-        "3-bit gives 4.6x compression. Default: no compression.",
-        default=None,
-    )
-    parser.add_argument(
-        "--turbo-fp16-layers",
-        type=int,
-        help="Number of first/last layers to keep in FP16 "
-        "when using --turbo-kv-bits. Default: 1.",
-        default=1,
-    )
-    parser.add_argument(
         "--draft-model",
         type=str,
         help="A model to be used for speculative decoding.",
@@ -244,12 +226,6 @@ def setup_arg_parser():
         help="Step size for prompt prefill processing. "
         "Larger values process more tokens per forward pass "
         "but use more memory. Default: 2048.",
-    )
-    parser.add_argument(
-        "--mtp",
-        action="store_true",
-        help="Use native Multi-Token Prediction for speculative decoding "
-        "(requires a model with an MTP head, e.g. Qwen3.5).",
     )
     parser.add_argument(
         "--mtp",
@@ -341,7 +317,6 @@ def maybe_quantize_kv_cache(prompt_cache, quantized_kv_start, kv_group_size, kv_
             prompt_cache[e] = c.to_quantized(group_size=kv_group_size, bits=kv_bits)
 
 
-
 def generate_step(
     prompt: mx.array,
     model: nn.Module,
@@ -355,10 +330,11 @@ def generate_step(
     kv_bits: Optional[int] = None,
     kv_group_size: int = 64,
     quantized_kv_start: int = 0,
-    turbo_kv_bits: Optional[int] = None,
-    turbo_fp16_layers: int = 1,
     prompt_progress_callback: Optional[Callable[[int, int], None]] = None,
     input_embeddings: Optional[mx.array] = None,
+    turbo_kv_bits: Optional[int] = None,
+    turbo_fp16_layers: int = 1,
+    mtp: bool = False,
 ) -> Generator[Tuple[mx.array, mx.array], None, None]:
     """
     A generator producing token ids based on the given prompt from the model.
@@ -383,15 +359,15 @@ def generate_step(
         kv_group_size (int): Group size for KV cache quantization. Default: ``64``.
         quantized_kv_start (int): Step to begin using a quantized KV cache.
            when ``kv_bits`` is non-None. Default: ``0``.
-        turbo_kv_bits (int, optional): TurboQuant KV cache compression bits (1-4).
-          Uses PolarQuant with Hadamard rotation. 3-bit gives 4.6x compression.
-          None implies no TurboQuant. Default: ``None``.
-        turbo_fp16_layers (int): Number of first/last layers to keep in FP16 when
-          using TurboQuant. Default: ``1``.
         prompt_progress_callback (Callable[[int, int], None]): A call-back which takes the
            prompt tokens processed so far and the total number of prompt tokens.
         input_embeddings (mx.array, optional): Input embeddings to use instead of or in
           conjunction with prompt tokens. Default: ``None``.
+        turbo_kv_bits (int, optional): TurboQuant KV cache bits.
+          Default: ``None``.
+        turbo_fp16_layers (int): Number of FP16 layers for TurboQuant.
+          Default: ``1``.
+        mtp (bool): Use multi-token prediction. Default: ``False``.
 
     Yields:
         Tuple[mx.array, mx.array]: One token and a vector of log probabilities.
@@ -410,7 +386,7 @@ def generate_step(
             "Either input_embeddings or prompt (or both) must be provided."
         )
 
-    token_buf = TokenBuffer()
+    tokens = None
 
     # Create the KV cache for generation
     if prompt_cache is None:
@@ -441,7 +417,7 @@ def generate_step(
             return model(input_tokens, cache=prompt_cache)
 
     def _step(input_tokens: mx.array, input_embeddings: Optional[mx.array] = None):
-        nonlocal token_buf
+        nonlocal tokens
 
         with mx.stream(generation_stream):
             logits = _model_call(
@@ -457,7 +433,11 @@ def generate_step(
                 logits = logits[:, -1, :]
 
             if logits_processors and len(input_tokens) > 0:
-                tokens = token_buf.update_and_fetch(input_tokens)
+                tokens = (
+                    mx.concat([tokens, input_tokens])
+                    if tokens is not None
+                    else input_tokens
+                )
                 for processor in logits_processors:
                     logits = processor(tokens, logits)
 
@@ -482,17 +462,9 @@ def generate_step(
         )
         prompt_processed_tokens = 0
         prompt_progress_callback(prompt_processed_tokens, total_prompt_tokens)
-
-        # Memory-adaptive prefill: start with user step, reduce if memory tight
-        current_step = prefill_step_size
-        if mx.metal.is_available():
-            limit = mx.device_info().get("max_recommended_working_set_size", 0)
-        else:
-            limit = 0
-
         while total_prompt_tokens - prompt_processed_tokens > 1:
             remaining = (total_prompt_tokens - prompt_processed_tokens) - 1
-            n_to_process = min(current_step, remaining)
+            n_to_process = min(prefill_step_size, remaining)
             _model_call(
                 input_tokens=prompt[:n_to_process][None],
                 input_embeddings=(
@@ -513,31 +485,23 @@ def generate_step(
             )
             mx.clear_cache()
 
-            # Reduce step size if memory pressure is high (peak approaching limit)
-            if limit > 0 and mx.get_peak_memory() > 0.85 * limit:
-                current_step = max(256, current_step // 2)
-
         y, logprobs = _step(input_tokens=prompt, input_embeddings=input_embeddings)
 
-    y0, lp0 = _step(input_tokens=prompt, input_embeddings=input_embeddings)
-    mx.async_eval(y0, lp0)
-    y1, lp1 = _step(y0)
-    mx.async_eval(y1, lp1)
+    mx.async_eval(y, logprobs)
     n = 0
     while True:
         if n != max_tokens:
-            y2, lp2 = _step(y1)
-            mx.async_eval(y2, lp2)
+            next_y, next_logprobs = _step(y)
+            mx.async_eval(next_y, next_logprobs)
         if n == 0:
-            mx.eval(y0)
+            mx.eval(y)
             prompt_progress_callback(total_prompt_tokens, total_prompt_tokens)
         if n == max_tokens:
             break
-        yield y0.item(), lp0
+        yield y.item(), logprobs
         if n % 256 == 0:
             mx.clear_cache()
-        y0, lp0 = y1, lp1
-        y1, lp1 = y2, lp2
+        y, logprobs = next_y, next_logprobs
         n += 1
 
 
@@ -555,6 +519,8 @@ def speculative_generate_step(
     kv_bits: Optional[int] = None,
     kv_group_size: int = 64,
     quantized_kv_start: int = 0,
+    turbo_kv_bits: Optional[int] = None,
+    turbo_fp16_layers: int = 1,
 ) -> Generator[Tuple[mx.array, mx.array, bool], None, None]:
     """
     A generator producing token ids based on the given prompt from the model.
@@ -587,12 +553,12 @@ def speculative_generate_step(
     """
 
     y = prompt.astype(mx.uint32)
-    token_buf = TokenBuffer()
+    prev_tokens = None
 
     # Create the KV cache for generation
     if prompt_cache is None:
-        model_cache = cache.make_prompt_cache(model)
-        draft_cache = cache.make_prompt_cache(draft_model)
+        model_cache = cache.make_prompt_cache(model, turbo_kv_bits=turbo_kv_bits, turbo_fp16_layers=turbo_fp16_layers)
+        draft_cache = cache.make_prompt_cache(draft_model, turbo_kv_bits=turbo_kv_bits, turbo_fp16_layers=turbo_fp16_layers)
     else:
         model_cache = prompt_cache[: len(model.layers)]
         draft_cache = prompt_cache[len(model.layers) :]
@@ -628,13 +594,17 @@ def speculative_generate_step(
 
             quantize_cache_fn(cache)
             if logits_processors:
-                nonlocal token_buf
+                nonlocal prev_tokens
                 out_y, out_logprobs = [], []
                 if n_predict > 1:
                     y = y[: -(n_predict - 1)]
                 for i in range(n_predict):
-                    tokens = token_buf.update_and_fetch(y)
-                    y, logprobs = _process_and_sample(tokens, logits[:, i, :])
+                    prev_tokens = (
+                        mx.concatenate([prev_tokens, y])
+                        if prev_tokens is not None
+                        else y
+                    )
+                    y, logprobs = _process_and_sample(prev_tokens, logits[:, i, :])
                     out_y.append(y)
                     out_logprobs.append(logprobs)
                 return mx.concatenate(out_y, axis=0), mx.concatenate(
@@ -643,22 +613,14 @@ def speculative_generate_step(
             else:
                 return _process_and_sample(None, logits.squeeze(0))
 
-    _spec_limit = (
-        mx.device_info().get("max_recommended_working_set_size", 0)
-        if mx.metal.is_available() else 0
-    )
-
     def _prefill(model, cache, y):
-        current_step = prefill_step_size
         while y.size > 1:
-            n_to_process = min(current_step, y.size - 1)
+            n_to_process = min(prefill_step_size, y.size - 1)
             model(y[:n_to_process][None], cache=cache)
             quantize_cache_fn(cache)
             mx.eval([c.state for c in cache])
             y = y[n_to_process:]
             mx.clear_cache()
-            if _spec_limit > 0 and mx.get_peak_memory() > 0.85 * _spec_limit:
-                current_step = max(256, current_step // 2)
         return y
 
     def _rewind_cache(num_draft, num_accept):
@@ -729,267 +691,12 @@ def speculative_generate_step(
         _rewind_cache(num_draft, n)
 
 
-def mtp_generate_step(
-    prompt: mx.array,
-    model: nn.Module,
-    *,
-    max_tokens: int = 256,
-    sampler: Optional[Callable[[mx.array], mx.array]] = None,
-    logits_processors: Optional[List[Callable[[mx.array, mx.array], mx.array]]] = None,
-    prompt_cache: Optional[Any] = None,
-    prefill_step_size: int = 2048,
-    kv_bits: Optional[int] = None,
-    kv_group_size: int = 64,
-    quantized_kv_start: int = 0,
-    turbo_kv_bits: Optional[int] = None,
-    turbo_fp16_layers: int = 1,
-) -> Generator[Tuple[mx.array, mx.array, bool], None, None]:
-    """A generator that uses the model's native MTP head for speculative decoding.
-
-    Each iteration runs one backbone forward pass over the current token and its
-    pending draft, then one MTP forward pass to propose the next draft.  Up to 2
-    tokens are emitted per backbone step: one always-accepted backbone token and
-    one conditionally-accepted draft token.
-
-    The model must implement ``mtp_forward(hidden, next_tok, mtp_cache)`` and
-    support ``return_hidden=True`` in its ``__call__``.
-
-    Yields:
-        Tuple[mx.array, mx.array, bool]: (token, log-probabilities, from_draft).
-            ``from_draft`` is ``True`` when the token came from the MTP head.
-    """
-    y = prompt.astype(mx.uint32)
-    prev_tokens = None
-
-    # Use regular KVCache during prefill to avoid memory spike from TurboQuant dequant buffers
-    # After prefill completes, convert to TurboQuant for memory-efficient generation
-    if prompt_cache is None:
-        model_cache = cache.make_prompt_cache(
-            model,
-            turbo_kv_bits=None,  # No TurboQuant during prefill
-            turbo_fp16_layers=turbo_fp16_layers,
-        )
-        mtp_cache = model.make_mtp_cache()
-    else:
-        n_main = len(model.layers)
-        model_cache = prompt_cache[:n_main]
-        mtp_cache = prompt_cache[n_main:] or model.make_mtp_cache()
-
-    # Prefill phase (runs before entering main loop)
-    def _convert_to_turbo():
-        if turbo_kv_bits is not None:
-            from mlx_lm.models.turboquant_cache import TurboQuantKVCache
-            # Convert model cache to TurboQuant after prefill
-            for i, c in enumerate(model_cache):
-                if hasattr(c, 'is_trimmable') and not isinstance(c, TurboQuantKVCache):
-                    tqc = TurboQuantKVCache(bits=turbo_kv_bits)
-                    if hasattr(c, 'state') and c.state:
-                        tqc.state = c.state
-                    if hasattr(c, 'meta_state'):
-                        tqc.meta_state = c.meta_state
-                    model_cache[i] = tqc
-            # Convert MTP cache to TurboQuant
-            if mtp_cache:
-                mtp_cache = [TurboQuantKVCache(bits=turbo_kv_bits) for _ in mtp_cache]
-            logging.info(f"Converted caches to TurboQuant({turbo_kv_bits}bit) after prefill")
-
-    # Exact-match acceptance for greedy (sampler=None); probabilistic
-    # acceptance min(1, p_target/p_draft) for stochastic samplers.
-    _is_greedy = sampler is None
-    sampler = sampler or (lambda x: mx.argmax(x, axis=-1))
-
-    quantize_cache_fn = functools.partial(
-        maybe_quantize_kv_cache,
-        quantized_kv_start=quantized_kv_start,
-        kv_group_size=kv_group_size,
-        kv_bits=kv_bits,
-    )
-
-    def _process_and_sample(tokens, logits):
-        if logits_processors:
-            for processor in logits_processors:
-                logits = processor(tokens, logits)
-        logprobs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
-        return sampler(logprobs), logprobs
-
-    def _clear_rollback():
-        for c in model_cache:
-            if hasattr(c, "rollback_state"):
-                c.rollback_state = None
-
-    def _rollback_draft():
-        """Restore caches to the state after the confirmed token.
-
-        SSM layers (ArraysCache): restore the conv/ssm snapshot saved by
-        GatedDeltaNet after the confirmed token.
-        Attention layers (KVCache): trim the draft-token entry.
-        """
-        for c in model_cache:
-            if hasattr(c, "rollback_state") and c.rollback_state is not None:
-                conv_snap, ssm_snap = c.rollback_state
-                c[0] = conv_snap
-                c[1] = ssm_snap
-                c.rollback_state = None
-            elif c.is_trimmable():
-                c.trim(1)
-        cache.trim_prompt_cache(mtp_cache, 1)
-
-    def _step_backbone(y, prev_tokens, n_predict=1, n_confirmed=0):
-        """Run the backbone on ``y`` and return (tokens, logprobs, hidden, prev_tokens)."""
-        with mx.stream(generation_stream):
-            logits, hidden = model(
-                y[None], cache=model_cache, return_hidden=True, n_confirmed=n_confirmed
-            )
-            logits = logits[:, -n_predict:, :]
-            quantize_cache_fn(model_cache)
-            toks, lps = [], []
-            for i in range(n_predict):
-                if logits_processors:
-                    prev_tokens = (
-                        mx.concatenate([prev_tokens, y[i : i + 1]])
-                        if prev_tokens is not None
-                        else y[i : i + 1]
-                    )
-                    if prev_tokens.size > 512:
-                        prev_tokens = prev_tokens[-512:]
-                tok, lp = _process_and_sample(prev_tokens, logits[:, i, :].squeeze(0))
-                toks.append(tok)
-                lps.append(lp)
-            return mx.stack(toks), mx.stack(lps), hidden, prev_tokens
-
-    def _step_mtp(hidden_last, main_tok, prev_tokens):
-        """Run the MTP head and return (draft_token, draft_logprobs)."""
-        next_ids = main_tok.reshape(1, 1)
-        with mx.stream(generation_stream):
-            mtp_logits = model.mtp_forward(hidden_last, next_ids, mtp_cache)
-            quantize_cache_fn(mtp_cache)
-            mtp_logits = mtp_logits[:, -1, :].squeeze(0)
-            if logits_processors:
-                tokens_for_proc = (
-                    mx.concatenate([prev_tokens, main_tok.reshape(-1)])
-                    if prev_tokens is not None
-                    else main_tok.reshape(-1)
-                )
-                if tokens_for_proc.size > 512:
-                    tokens_for_proc = tokens_for_proc[-512:]
-            else:
-                tokens_for_proc = prev_tokens
-            draft_tok, draft_lp = _process_and_sample(tokens_for_proc, mtp_logits)
-        return draft_tok, draft_lp
-
-    _mtp_limit = (
-        mx.device_info().get("max_recommended_working_set_size", 0)
-        if mx.metal.is_available() else 0
-    )
-
-    def _prefill(y):
-        # Leave exactly 1 token for _step_backbone: return_hidden=True keeps
-        # the hidden state [1, N, d_model] live, so N must be 1.
-        current_step = prefill_step_size
-        while y.size > 1:
-            n = min(current_step, y.size - 1)
-            model(y[:n][None], cache=model_cache)
-            quantize_cache_fn(model_cache)
-            mx.eval([c.state for c in model_cache if hasattr(c, "state")])
-            y = y[n:]
-            mx.clear_cache()
-            if _mtp_limit > 0 and mx.get_peak_memory() > 0.85 * _mtp_limit:
-                current_step = max(256, current_step // 2)
-        return y
-
-    with mx.stream(generation_stream):
-        y = _prefill(y)
-
-    # Skip TurboQuant conversion - KVCache and TurboQuant have incompatible formats
-    # Keep using regular KVCache (already uses less memory than uncompressed)
-    # Note: TurboQuant compression benefit applies mainly to cached prompts
-    if turbo_kv_bits is not None:
-        logging.info("Using regular KVCache (TurboQuant conversion skipped)")
-
-    ntoks = 0
-    draft_tok = draft_lp = None
-
-    while ntoks < max_tokens:
-        if draft_tok is None:
-            # No pending draft: run backbone only, then generate first draft.
-            toks, lps, hidden, prev_tokens = _step_backbone(y, prev_tokens, n_predict=1)
-            mx.eval(toks)
-            main_tok, main_lp = toks[0], lps[0]
-            ntoks += 1
-            yield main_tok.item(), main_lp, False
-            cache.trim_prompt_cache(model_cache, 1)
-            mx.clear_cache()
-            if ntoks >= max_tokens:
-                return
-            hidden_at_main = hidden[:, -1:, :]
-            draft_tok, draft_lp = _step_mtp(hidden_at_main, main_tok, prev_tokens)
-            mx.eval(draft_tok)
-            y = mx.array([main_tok.item()], mx.uint32)
-        else:
-            # Verify draft: run backbone over [y, draft_tok].
-            # n_confirmed=1 causes GatedDeltaNet to snapshot its SSM/conv state
-            # after the confirmed token y, enabling exact rollback on rejection.
-            y_with_draft = mx.concatenate([y, mx.array([draft_tok.item()], mx.uint32)])
-            toks, lps, hidden, prev_tokens = _step_backbone(
-                y_with_draft, prev_tokens, n_predict=2, n_confirmed=1
-            )
-            mx.eval(toks, draft_tok)
-
-            verify_pred, bonus_tok = toks[0], toks[1]
-            verify_lp, bonus_lp = lps[0], lps[1]
-            draft_tok_id = draft_tok.item()
-
-            if _is_greedy:
-                accept = verify_pred.item() == draft_tok_id
-            else:
-                # Probabilistic acceptance: min(1, p_target / p_draft).
-                log_accept = (verify_lp[draft_tok_id] - draft_lp[draft_tok_id]).item()
-                accept = log_accept >= 0 or random.random() < math.exp(log_accept)
-
-            hidden_at_confirmed = hidden[:, 0:1, :]
-            hidden_at_draft = hidden[:, 1:2, :]
-
-            if accept:
-                _clear_rollback()
-                ntoks += 1
-                yield draft_tok_id, draft_lp, True
-                cache.trim_prompt_cache(mtp_cache, 1)
-                cache.trim_prompt_cache(model_cache, 1)
-                mx.clear_cache()
-                if ntoks >= max_tokens:
-                    return
-                ntoks += 1
-                yield bonus_tok.item(), bonus_lp, False
-                if ntoks >= max_tokens:
-                    return
-                # Next draft from MTP at draft_tok's hidden state.
-                draft_tok, draft_lp = _step_mtp(hidden_at_draft, bonus_tok, prev_tokens)
-                mx.eval(draft_tok)
-                y = mx.array([bonus_tok.item()], mx.uint32)
-            else:
-                _rollback_draft()
-                if logits_processors and prev_tokens is not None:
-                    prev_tokens = prev_tokens[:-1]  # discard rejected draft token
-                verify_tok_id = verify_pred.item()
-                ntoks += 1
-                yield verify_tok_id, verify_lp, False
-                if ntoks >= max_tokens:
-                    return
-                # Next draft from MTP at y's hidden state.
-                draft_tok, draft_lp = _step_mtp(
-                    hidden_at_confirmed, verify_pred, prev_tokens
-                )
-                mx.eval(draft_tok)
-                y = mx.array([verify_tok_id], mx.uint32)
-
-
 def stream_generate(
     model: nn.Module,
     tokenizer: Union[PreTrainedTokenizer, TokenizerWrapper],
     prompt: Union[str, mx.array, List[int]],
     max_tokens: int = 256,
     draft_model: Optional[nn.Module] = None,
-    mtp: bool = False,
     **kwargs,
 ) -> Generator[GenerationResponse, None, None]:
     """
@@ -1005,8 +712,6 @@ def stream_generate(
         draft_model (Optional[nn.Module]): An optional draft model. If provided
           then speculative decoding is used. The draft model must use the same
           tokenizer as the main model. Default: ``None``.
-        mtp (bool): Use native Multi-Token Prediction for speculative
-          decoding. Requires a model with an MTP head. Default: ``False``.
         kwargs: The remaining options get passed to :func:`generate_step`.
           See :func:`generate_step` for more details.
 
@@ -1030,29 +735,18 @@ def stream_generate(
 
     kwargs["max_tokens"] = max_tokens
 
-    if draft_model is not None:
-        kwargs.pop("max_kv_size", None)
-        kwargs.pop("prompt_progress_callback", None)
-        token_generator = speculative_generate_step(
-            prompt, model, draft_model, **kwargs
-        )
-    elif mtp and hasattr(model, "mtp_forward"):
-        kwargs.pop("max_kv_size", None)
-        kwargs.pop("prompt_progress_callback", None)
-        kwargs.pop("num_draft_tokens", None)
-        token_generator = mtp_generate_step(prompt, model, **kwargs)
-    else:
-        if mtp:
-            warnings.warn(
-                "--mtp flag ignored: model does not have an MTP head. "
-                "Falling back to standard generation.",
-                stacklevel=2,
-            )
+    if draft_model is None:
         kwargs.pop("num_draft_tokens", None)
         token_generator = generate_step(prompt, model, **kwargs)
         # from_draft always false for non-speculative generation
         token_generator = (
             (token, logprobs, False) for token, logprobs in token_generator
+        )
+    else:
+        kwargs.pop("max_kv_size", None)
+        kwargs.pop("prompt_progress_callback", None)
+        token_generator = speculative_generate_step(
+            prompt, model, draft_model, **kwargs
         )
     with wired_limit(model, [generation_stream]):
         tic = time.perf_counter()
@@ -2424,12 +2118,8 @@ def main():
         kv_bits=args.kv_bits,
         kv_group_size=args.kv_group_size,
         quantized_kv_start=args.quantized_kv_start,
-        turbo_kv_bits=args.turbo_kv_bits,
-        turbo_fp16_layers=args.turbo_fp16_layers,
         draft_model=draft_model,
         num_draft_tokens=args.num_draft_tokens,
-        mtp=args.mtp,
-        prefill_step_size=args.prefill_step_size,
     )
     if not args.verbose:
         print(response)

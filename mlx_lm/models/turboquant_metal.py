@@ -21,12 +21,12 @@ FUSED_QUANTIZE_KERNEL = """
     uint n_centroids = dims[4];
 
     // Load input vector into shared memory as float32
-    threadgroup float shared[256];
+    threadgroup float shared[1024];
     shared[elem] = (float)inp[pos * dim + elem];
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
     // Step 1: Compute L2 norm via parallel reduction
-    threadgroup float norm_shared[256];
+    threadgroup float norm_shared[1024];
     norm_shared[elem] = shared[elem] * shared[elem];
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -78,7 +78,7 @@ FUSED_QUANTIZE_KERNEL = """
 
     // Step 7: Pack indices - thread 0 of each pack group collects and packs
     // First store indices to shared memory
-    threadgroup uint idx_shared[256];
+    threadgroup uint idx_shared[1024];
     idx_shared[elem] = idx;
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -117,7 +117,7 @@ DEQUANT_FP16_KERNEL = """
 
     float val = centroids[idx] * scale[0];
 
-    threadgroup float shared[256];
+    threadgroup float shared[1024];
     shared[elem] = val;
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
