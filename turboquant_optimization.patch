@@ -1,0 +1,21 @@
+diff --git a/.gitignore b/.gitignore
+index 45445fc..3cd1f84 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -137,3 +137,4 @@ dmypy.json
+ 
+ # .DS_Store files
+ .DS_Store
++mlx-vlm/
+diff --git a/mlx_lm/models/turboquant_cache.py b/mlx_lm/models/turboquant_cache.py
+index 4ad9366..6ccc5f4 100644
+--- a/mlx_lm/models/turboquant_cache.py
++++ b/mlx_lm/models/turboquant_cache.py
+@@ -11,6 +11,7 @@ from mlx_lm.models.turboquant_rotation import random_diagonal_sign
+ from mlx_lm.models.turboquant_packing import pack_indices, unpack_indices, packed_dim, VALS_PER_WORD
+ from mlx_lm.models.turboquant_metal import fused_quantize, dequant_fp16
+ from mlx_lm.models.turboquant_kernels import packed_dequantize
++from mlx_lm.models.turboquant_fused import fused_decode_attention
+ 
+ 
+ def _compute_gaussian_codebook(bits):
