@@ -610,26 +610,14 @@ def main():
                     sys_parts.append(f"The following research context about \"{topic}\" was gathered from web sources. Use it to inform your responses throughout this conversation.")
                     messages = [{"role": "system", "content": "\n\n".join(sys_parts)}]
 
-                    messages.append({"role": "user", "content": f"""You are a research synthesis engine. Below is structured research material about "{topic}".
+                    messages.append({"role": "user", "content": f"""Below is structured research material about "{topic}".
 
-Your task: Generate a massively detailed research report. This report must be EXHAUSTIVE — cover every possible detail someone might want to know.
-
-Rules:
-- Extract ALL facts, dates, names, numbers, statistics from the material
-- Cover every dimension in depth: {', '.join(result['dimensions'])}
-- Include background context, key events, chronology
-- Note controversies, criticisms, different perspectives
-- Include specific quotes, data points, source references
-- Organize into clear sections with subsections
-- The report should be LONG and THOROUGH — do not summarize, do not condense
-- If the source material is thin on a dimension, state what's known and note the gap
-
-Sources analyzed: {result['num_sources']}
+Do NOT write a report. Instead, read the material and then ask me what specific aspect I want to know about. Wait for my follow-up question before answering.
 
 Research material:
 {result['context_section']}
 
-Output the full research report now. Be extremely detailed — write pages, not paragraphs."""})
+Read the material and then ask me what I'd like to know about {topic}."""})
 
                     import datetime as _dt
                     _logpath = f"/tmp/mlx_research_{_dt.datetime.now():%Y%m%d_%H%M%S}.log"
@@ -642,8 +630,7 @@ Output the full research report now. Be extremely detailed — write pages, not 
                     # Disable MTP for research synthesis — re-enabled after generation
                     model._saved_mtp = args.mtp
                     args.mtp = False
-                    _cache_stale = True
-                    rprint("[INFO] Synthesizing research report...\n")
+                    rprint("[INFO] Research loaded. Ask me anything about it.\n")
                     continue
                 except Exception as e:
                     rprint(f"[ERROR] Research failed: {str(e)}")
