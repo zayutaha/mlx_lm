@@ -65,7 +65,7 @@ def run_research(topic: str, model, tokenizer, args,
         memory.topic_type = infer_topic_type(
             topic, model, tokenizer, args, chat_template_kwargs
         )
-        memory.dimensions = build_dimension_map(memory.topic_type)
+        memory.dimensions = build_dimension_map(memory.topic_type, topic=topic)
 
         # 2. Seed Search
         seed_candidates = seed_search(topic, num_results=15)
