@@ -99,10 +99,9 @@ from orchestrator import Orchestrator
 
 class ChatUI(App):
     BINDINGS = [
-        ("escape", "quit", "Quit"),
+        ("ctrl+c", "quit", "Quit"),
         ("ctrl+r", "reload_model", "Reload Model"),
         ("c", "copy_selected", "Copy Selected"),
-        ("ctrl+c", "copy_selected", "Copy Selected"),
     ]
     CSS = CHAT_CSS
 
