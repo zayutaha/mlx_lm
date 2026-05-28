@@ -17,21 +17,18 @@ from textual.app import App, ComposeResult
 from textual.containers import Center, Horizontal, Middle, Vertical, VerticalScroll
 from textual.events import Click, Key
 from textual.widgets import Button, Markdown, Static
-
-
+from textual import on
 import time as _time
+
 
 _selected_bubbles: list["CopyableMarkdown"] = []
 
 class CopyableMarkdown(Markdown):
-    """Markdown that toggles selection on click; copies selected on double-click."""
+    """Markdown that copy-all on double-click. No single-click toggle."""
 
     _last_click: float = 0.0
 
     async def on_click(self, event: Click):
-        text = self._markdown if hasattr(self, '_markdown') and self._markdown else self._initial_markdown or ""
-        if not text:
-            return
         app = self.app
         if not isinstance(app, ChatUI):
             return
@@ -43,14 +40,15 @@ class CopyableMarkdown(Markdown):
             event.stop()
             return
         self._last_click = now
-        # Toggle selection
-        if self in _selected_bubbles:
-            _selected_bubbles.remove(self)
-            self.remove_class("bubble-selected")
-        else:
-            _selected_bubbles.append(self)
-            self.add_class("bubble-selected")
-        app._update_selection_ui()
+        # Select this bubble if user holds ctrl
+        if event.is_ctrl:
+            if self in _selected_bubbles:
+                _selected_bubbles.remove(self)
+                self.remove_class("bubble-selected")
+            else:
+                _selected_bubbles.append(self)
+                self.add_class("bubble-selected")
+            app._update_selection_ui()
         event.prevent_default()
         event.stop()
 
@@ -101,9 +99,10 @@ from orchestrator import Orchestrator
 
 class ChatUI(App):
     BINDINGS = [
-        ("ctrl+c", "quit", "Quit"),
+        ("escape", "quit", "Quit"),
         ("ctrl+r", "reload_model", "Reload Model"),
-        ("ctrl+y", "copy_selected", "Copy Selected"),
+        ("c", "copy_selected", "Copy Selected"),
+        ("ctrl+c", "copy_selected", "Copy Selected"),
     ]
     CSS = CHAT_CSS
 
@@ -216,16 +215,14 @@ class ChatUI(App):
         self._update_selection_ui()
 
     def _update_selection_ui(self):
-        n = len(_selected_bubbles)
         btn = self.query_one("#send-btn", Static)
-        if n > 0:
-            btn.update(f" COPY {n} ")
-            btn.remove_class("stopping")
-        else:
-            btn.update(" SEND ")
-            btn.set_class(self.busy, "stopping")
+        btn.update(" SEND ")
+        btn.set_class(self.busy, "stopping")
 
     async def action_copy_selected(self):
+        if not _selected_bubbles:
+            self.notify("Ctrl+click a bubble to select it, then press C to copy", timeout=3)
+            return
         await _copy_selected(self)
 
     # ── Chat UI internals ──
@@ -285,14 +282,14 @@ class ChatUI(App):
         else:
             self._update_selection_ui()
 
-    async def on_static_click(self, event: Click):
-        if event.widget.id == "send-btn":
-            if _selected_bubbles:
-                await _copy_selected(self)
-            elif self.busy:
-                await self.action_interrupt()
-            else:
-                await self.action_submit()
+    @on(Click, "#send-btn")
+    async def on_send_click(self):
+        if _selected_bubbles:
+            await _copy_selected(self)
+        elif self.busy:
+            await self.controller.handle_interrupt()
+        else:
+            await self.controller.handle_submit()
 
     async def action_interrupt(self):
         await self.controller.handle_interrupt()
