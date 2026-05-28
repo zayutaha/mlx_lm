@@ -854,6 +854,18 @@ Read the material and then ask me what I'd like to know about {topic}."""})
 
         prompt = None
         if stop_generation:
+            # Drain leftover stdin bytes that the os.read(1) loop might have
+            # consumed (message text that raced ahead of \x04). This ensures
+            # input() on the next loop reads a fresh line.
+            try:
+                fd = sys.stdin.fileno()
+                while select.select([fd], [], [], 0)[0]:
+                    leftover = os.read(fd, 4096)
+                    if not leftover:
+                        break
+            except Exception:
+                pass
+
             tokens_added = _cache_offset(prompt_cache) - offset_before
             if tokens_added > 0:
                 if offset_before > 0:
