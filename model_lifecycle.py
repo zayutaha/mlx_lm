@@ -118,10 +118,12 @@ class ModelRunner:
     async def interrupt(self):
         if self.running:
             try:
-                self.proc.stdin.write(b"\x04")
-                await self.proc.stdin.drain()
+                os.killpg(self.proc_pgid, signal.SIGINT)
             except Exception:
-                pass
+                try:
+                    self.proc.send_signal(signal.SIGINT)
+                except Exception:
+                    pass
 
     async def stop(self):
         proc = self.proc

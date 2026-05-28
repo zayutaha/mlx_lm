@@ -3,8 +3,7 @@
 import argparse
 import gc
 import json
-import os
-import select
+import signal
 import sys
 from typing import Generator, List, Optional, Union
 
@@ -759,6 +758,11 @@ Read the material and then ask me what I'd like to know about {topic}."""})
         last_response = None
         stop_generation = False
         response_text = ""
+
+        # SIGINT handler for TUI interrupts — avoids os.read() eating stdin
+        _interrupted = [False]
+        _orig_handler = signal.signal(signal.SIGINT, lambda s, f: _interrupted.__setitem__(0, True))
+
         def _cache_offset(cache):
             for c in cache:
                 if hasattr(c, "offset"):
@@ -792,16 +796,12 @@ Read the material and then ask me what I'd like to know about {topic}."""})
             response_text += response.text
             rprint(response.text, flush=True, end="")
             last_response = response
-            if sys.platform != "win32":
-                if select.select([sys.stdin], [], [], 0)[0]:
-                    try:
-                        char = os.read(sys.stdin.fileno(), 1)
-                        if char == b"\x04" or char == b"":
-                            rprint("\n[INFO] Generation stopped by user.")
-                            stop_generation = True
-                            break
-                    except Exception:
-                        pass
+            if _interrupted[0]:
+                _interrupted[0] = False
+                signal.signal(signal.SIGINT, signal.SIG_DFL)
+                rprint("\n[INFO] Generation stopped by user.")
+                stop_generation = True
+                break
         if not stop_generation:
             rprint()
         if last_response and not stop_generation:
@@ -852,19 +852,11 @@ Read the material and then ask me what I'd like to know about {topic}."""})
                 )
                 _cache_stale = False
 
+        # Restore SIGINT handler
+        signal.signal(signal.SIGINT, _orig_handler)
+
         prompt = None
         if stop_generation:
-            # Drain leftover stdin bytes that the os.read(1) loop might have
-            # consumed (message text that raced ahead of \x04). This ensures
-            # input() on the next loop reads a fresh line.
-            try:
-                fd = sys.stdin.fileno()
-                while select.select([fd], [], [], 0)[0]:
-                    leftover = os.read(fd, 4096)
-                    if not leftover:
-                        break
-            except Exception:
-                pass
 
             tokens_added = _cache_offset(prompt_cache) - offset_before
             if tokens_added > 0:
