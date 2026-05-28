@@ -19,10 +19,14 @@ from textual.events import Click, Key
 from textual.widgets import Button, Markdown, Static
 
 
+import time as _time
+
 _selected_bubbles: list["CopyableMarkdown"] = []
 
 class CopyableMarkdown(Markdown):
     """Markdown that toggles selection on click; copies selected on double-click."""
+
+    _last_click: float = 0.0
 
     def on_click(self, event: Click):
         text = self._markdown if hasattr(self, '_markdown') and self._markdown else self._initial_markdown or ""
@@ -31,9 +35,14 @@ class CopyableMarkdown(Markdown):
         app = self.app
         if not isinstance(app, ChatUI):
             return
-        if event.is_double:
+        now = _time.monotonic()
+        if now - self._last_click < 0.4:
+            self._last_click = 0
             _copy_selected(app)
+            event.prevent_default()
+            event.stop()
             return
+        self._last_click = now
         # Toggle selection
         if self in _selected_bubbles:
             _selected_bubbles.remove(self)
