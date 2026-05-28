@@ -57,10 +57,18 @@ Screen {
     color: #d8d8d8;
 }
 
+.bubble-user:hover {
+    border: round #555;
+}
+
 .bubble-assistant {
     margin-bottom: 1;
     padding: 1 2 0 2;
     color: #f0a500;
+}
+
+.bubble-assistant:hover {
+    border: tab #f0a500;
 }
 
 .bubble-welcome {

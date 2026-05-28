@@ -10,12 +10,32 @@ tk.key_to_character = safe_key_to_character
 
 
 import random
+import subprocess
 from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual.containers import Center, Horizontal, Middle, Vertical, VerticalScroll
 from textual.events import Click, Key
 from textual.widgets import Button, Markdown, Static
+
+
+class CopyableMarkdown(Markdown):
+    """Markdown that copies its content on click."""
+
+    def on_click(self, event: Click):
+        text = self._markdown if hasattr(self, '_markdown') and self._markdown else self._initial_markdown or ""
+        if not text:
+            return
+        try:
+            p = subprocess.run(["pbcopy"], input=text.encode(), check=False)
+            if p.returncode == 0:
+                self.app.notify("Copied to clipboard", timeout=1.5)
+            else:
+                self.app.notify("Failed to copy", severity="error", timeout=1.5)
+        except FileNotFoundError:
+            self.app.notify("pbcopy not available", severity="error", timeout=1.5)
+        event.prevent_default()
+        event.stop()
 
 from model_catalog import list_models
 from textual_ui.styles import CHAT_CSS, LOGO, WELCOME_MESSAGES
@@ -185,7 +205,7 @@ class ChatUI(App):
         if "welcome-logo" in existing_ids or "welcome-prompt" in existing_ids:
             return
         welcome = random.choice(WELCOME_MESSAGES)
-        chat.mount(Markdown(f"```\n{welcome}\n```", id="welcome-logo", classes="bubble-welcome"))
+        chat.mount(CopyableMarkdown(f"```\n{welcome}\n```", id="welcome-logo", classes="bubble-welcome"))
         chat.mount(Static("How can I help you?", id="welcome-prompt", classes="bubble-prompt"))
         chat.scroll_end(animate=False)
 
@@ -311,9 +331,9 @@ class ChatUI(App):
 
     async def handle_stream_text(self, user_text: str) -> None:
         chat = self.query_one("#chat", VerticalScroll)
-        await chat.mount(Markdown(user_text, classes="bubble-user"))
+        await chat.mount(CopyableMarkdown(user_text, classes="bubble-user"))
         self._stream_generation += 1
-        self.current_md = Markdown("▌", classes="bubble-assistant")
+        self.current_md = CopyableMarkdown("▌", classes="bubble-assistant")
         self.current_md._generation = self._stream_generation
         await chat.mount(self.current_md)
         chat.scroll_end(animate=False)
