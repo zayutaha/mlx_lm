@@ -759,7 +759,12 @@ Read the material and then ask me what I'd like to know about {topic}."""})
         last_response = None
         stop_generation = False
         response_text = ""
-        offset_before = prompt_cache[0].offset if prompt_cache else 0
+        def _cache_offset(cache):
+            for c in cache:
+                if hasattr(c, "offset"):
+                    return c.offset
+            return 0
+        offset_before = _cache_offset(prompt_cache) if prompt_cache else 0
         for response in stream_generate(
             model,
             tokenizer,
@@ -849,7 +854,7 @@ Read the material and then ask me what I'd like to know about {topic}."""})
 
         prompt = None
         if stop_generation:
-            tokens_added = prompt_cache[0].offset - offset_before
+            tokens_added = _cache_offset(prompt_cache) - offset_before
             if tokens_added > 0:
                 if offset_before > 0:
                     trim_prompt_cache(prompt_cache, tokens_added)
