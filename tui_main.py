@@ -40,8 +40,8 @@ class CopyableMarkdown(Markdown):
             event.stop()
             return
         self._last_click = now
-        # Select this bubble if user holds ctrl
-        if event.is_ctrl:
+        # Only intercept when Ctrl is held (bubble selection)
+        if event.ctrl:
             if self in _selected_bubbles:
                 _selected_bubbles.remove(self)
                 self.remove_class("bubble-selected")
@@ -49,8 +49,8 @@ class CopyableMarkdown(Markdown):
                 _selected_bubbles.append(self)
                 self.add_class("bubble-selected")
             app._update_selection_ui()
-        event.prevent_default()
-        event.stop()
+            event.prevent_default()
+            event.stop()
 
 
 async def _copy_selected(app: "ChatUI"):
