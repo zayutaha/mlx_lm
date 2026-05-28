@@ -18,39 +18,12 @@ from textual.containers import Center, Horizontal, Middle, Vertical, VerticalScr
 from textual.events import Click, Key
 from textual.widgets import Button, Markdown, Static
 from textual import on
-import time as _time
 
 
 _selected_bubbles: list["CopyableMarkdown"] = []
 
 class CopyableMarkdown(Markdown):
-    """Markdown that copy-all on double-click. No single-click toggle."""
-
-    _last_click: float = 0.0
-
-    async def on_click(self, event: Click):
-        app = self.app
-        if not isinstance(app, ChatUI):
-            return
-        now = _time.monotonic()
-        if now - self._last_click < 0.4:
-            self._last_click = 0
-            await _copy_selected(app)
-            event.prevent_default()
-            event.stop()
-            return
-        self._last_click = now
-        # Only intercept when Ctrl is held (bubble selection)
-        if event.ctrl:
-            if self in _selected_bubbles:
-                _selected_bubbles.remove(self)
-                self.remove_class("bubble-selected")
-            else:
-                _selected_bubbles.append(self)
-                self.add_class("bubble-selected")
-            app._update_selection_ui()
-            event.prevent_default()
-            event.stop()
+    """Pass-through markdown. No click handling — terminal handles text selection natively."""
 
 
 async def _copy_selected(app: "ChatUI"):
@@ -101,7 +74,8 @@ class ChatUI(App):
     BINDINGS = [
         ("ctrl+c", "quit", "Quit"),
         ("ctrl+r", "reload_model", "Reload Model"),
-        ("c", "copy_selected", "Copy Selected"),
+        ("v", "toggle_select_mode", "Select"),
+        ("c", "copy_selected", "Copy"),
     ]
     CSS = CHAT_CSS
 
@@ -114,6 +88,7 @@ class ChatUI(App):
         self.loading = False
         self.busy = False
         self.interrupted = False
+        self.select_mode = False
         self.first_message = True
         self.crash_dialog_visible = False
         self.current_md = None
@@ -215,8 +190,17 @@ class ChatUI(App):
 
     def _update_selection_ui(self):
         btn = self.query_one("#send-btn", Static)
-        btn.update(" SEND ")
-        btn.set_class(self.busy, "stopping")
+        n = len(_selected_bubbles)
+        if self.select_mode:
+            label = f" SELECT {n} " if n else " SELECT "
+            btn.update(label)
+            btn.set_class(self.busy, "stopping")
+        elif self.busy:
+            btn.update(" STOP ")
+            btn.set_class(True, "stopping")
+        else:
+            btn.update(" SEND ")
+            btn.set_class(False, "stopping")
 
     async def action_copy_selected(self):
         if not _selected_bubbles:
@@ -271,6 +255,14 @@ class ChatUI(App):
 
     # ── Action handlers ──
 
+    async def action_toggle_select_mode(self):
+        self.select_mode = not self.select_mode
+        self._update_selection_ui()
+        if self.select_mode:
+            self.notify("SELECT: click bubble to mark, C to copy all", timeout=3)
+        else:
+            self.notify("Shift+drag to select text, Cmd+C to copy", timeout=3)
+
     async def action_submit(self):
         await self.controller.handle_submit()
 
@@ -289,6 +281,23 @@ class ChatUI(App):
             await self.controller.handle_interrupt()
         else:
             await self.controller.handle_submit()
+
+    async def on_click(self, event: Click):
+        if not self.select_mode:
+            return
+        widget = event.widget
+        if isinstance(widget, CopyableMarkdown):
+            text = widget._markdown if hasattr(widget, '_markdown') and widget._markdown else widget._initial_markdown or ""
+            if not text:
+                return
+            if widget in _selected_bubbles:
+                _selected_bubbles.remove(widget)
+                widget.remove_class("bubble-selected")
+            else:
+                _selected_bubbles.append(widget)
+                widget.add_class("bubble-selected")
+            self._update_selection_ui()
+            event.stop()
 
     async def action_interrupt(self):
         await self.controller.handle_interrupt()

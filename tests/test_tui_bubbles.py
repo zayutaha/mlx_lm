@@ -5,24 +5,20 @@ from unittest.mock import MagicMock, patch
 
 class TestCopyableMarkdown(unittest.TestCase):
 
-    def test_click_has_ctrl_attr(self):
-        """Verify the Click event has the 'ctrl' attribute we depend on."""
-        from textual.events import Click
-        self.assertTrue(hasattr(Click, "ctrl"),
-                        "Click event missing 'ctrl' attribute")
-        self.assertFalse(hasattr(Click, "is_ctrl"),
-                         "Click has 'is_ctrl' — fix handler to use it")
-        self.assertFalse(hasattr(Click, "is_double"),
-                         "Click has 'is_double' — fix handler to use it")
-
-    def test_on_click_uses_ctrl_not_is_ctrl(self):
-        """The on_click handler should reference event.ctrl, not event.is_ctrl."""
+    def test_copyable_markdown_has_no_on_click(self):
+        """CopyableMarkdown should not define on_click (lets terminal handle clicks)."""
         import tui_main
         import inspect
-        src = inspect.getsource(tui_main.CopyableMarkdown.on_click)
-        self.assertIn("event.ctrl", src)
-        self.assertNotIn("is_ctrl", src)
-        self.assertNotIn("is_double", src)
+        src = inspect.getsource(tui_main.CopyableMarkdown)
+        self.assertNotIn("on_click", src,
+                         "CopyableMarkdown should not override on_click")
+
+    def test_chatui_has_on_click_for_select_mode(self):
+        """ChatUI.on_click should handle bubble selection in select mode."""
+        import tui_main
+        import inspect
+        src = inspect.getsource(tui_main.ChatUI.on_click)
+        self.assertIn("select_mode", src)
 
     def test_copy_selected_empty_does_nothing(self):
         """_copy_selected with no selections should notify and not run pbcopy."""
