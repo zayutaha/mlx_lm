@@ -459,10 +459,18 @@ def main():
     _cache_stale = False
 
     while True:
+        if _interrupted[0]:
+            _interrupted[0] = False
+            rprint("\n[INFO] Generation stopped.")
+            if prompt is not None:
+                continue
         if prompt is None:
             try:
                 query = input(args.prompt_marker if rank == 0 else "")
-            except EOFError:
+            except (EOFError, KeyboardInterrupt):
+                if _interrupted[0]:
+                    _interrupted[0] = False
+                    continue
                 rprint("\n[INFO] Exiting...")
                 break
             if query == "q":
@@ -759,9 +767,13 @@ Read the material and then ask me what I'd like to know about {topic}."""})
         stop_generation = False
         response_text = ""
 
-        # SIGINT handler for TUI interrupts — avoids os.read() eating stdin
+        # SIGINT handler for TUI interrupts — stays active permanently
         _interrupted = [False]
-        _orig_handler = signal.signal(signal.SIGINT, lambda s, f: _interrupted.__setitem__(0, True))
+
+        def _sigint_handler(s, f):
+            _interrupted[0] = True
+
+        signal.signal(signal.SIGINT, _sigint_handler)
 
         def _cache_offset(cache):
             for c in cache:
@@ -798,7 +810,6 @@ Read the material and then ask me what I'd like to know about {topic}."""})
             last_response = response
             if _interrupted[0]:
                 _interrupted[0] = False
-                signal.signal(signal.SIGINT, signal.SIG_DFL)
                 rprint("\n[INFO] Generation stopped by user.")
                 stop_generation = True
                 break
@@ -851,9 +862,6 @@ Read the material and then ask me what I'd like to know about {topic}."""})
                     turbo_fp16_layers=args.turbo_fp16_layers,
                 )
                 _cache_stale = False
-
-        # Restore SIGINT handler
-        signal.signal(signal.SIGINT, _orig_handler)
 
         prompt = None
         if stop_generation:
