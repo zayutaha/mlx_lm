@@ -458,6 +458,14 @@ def main():
     message_history: list = []
     _cache_stale = False
 
+    # SIGINT handler for TUI interrupts — stays active permanently
+    _interrupted = [False]
+
+    def _sigint_handler(s, f):
+        _interrupted[0] = True
+
+    signal.signal(signal.SIGINT, _sigint_handler)
+
     while True:
         if _interrupted[0]:
             _interrupted[0] = False
@@ -766,14 +774,6 @@ Read the material and then ask me what I'd like to know about {topic}."""})
         last_response = None
         stop_generation = False
         response_text = ""
-
-        # SIGINT handler for TUI interrupts — stays active permanently
-        _interrupted = [False]
-
-        def _sigint_handler(s, f):
-            _interrupted[0] = True
-
-        signal.signal(signal.SIGINT, _sigint_handler)
 
         def _cache_offset(cache):
             for c in cache:
