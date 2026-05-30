@@ -752,7 +752,7 @@ def mtp_generate_step(
         )
         mtp_cache = model.make_mtp_cache()
     else:
-        n_main = len(model.layers)
+        n_main = len(prompt_cache) - len(model.make_mtp_cache())
         model_cache = prompt_cache[:n_main]
         mtp_cache = prompt_cache[n_main:] or model.make_mtp_cache()
 
@@ -889,7 +889,7 @@ def mtp_generate_step(
             toks, lps, hidden, prev_tokens = _step_backbone(
                 y_with_draft, prev_tokens, n_predict=2, n_confirmed=1
             )
-            mx.eval(toks)
+            mx.eval(toks, draft_tok)
 
             verify_pred, bonus_tok = toks[0], toks[1]
             verify_lp, bonus_lp = lps[0], lps[1]
