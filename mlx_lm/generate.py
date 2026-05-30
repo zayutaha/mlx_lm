@@ -875,6 +875,7 @@ def mtp_generate_step(
             ntoks += 1
             yield main_tok.item(), main_lp, False
             cache.trim_prompt_cache(model_cache, 1)
+            mx.clear_cache()
             if ntoks >= max_tokens:
                 return
             hidden_at_main = hidden[:, -1:, :]
@@ -911,6 +912,7 @@ def mtp_generate_step(
                 yield draft_tok_id, draft_lp, True
                 cache.trim_prompt_cache(mtp_cache, 1)
                 cache.trim_prompt_cache(model_cache, 1)
+                mx.clear_cache()
                 if ntoks >= max_tokens:
                     return
                 ntoks += 1
