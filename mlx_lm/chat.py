@@ -357,10 +357,10 @@ def setup_arg_parser():
     parser.add_argument(
         "--prefill-step-size",
         type=int,
-        default=2048,
+        default=256,
         help="Step size for prompt prefill processing. "
         "Larger values process more tokens per forward pass "
-        "but use more memory. Default: 2048.",
+        "but use more memory. Default: 256.",
     )
     parser.add_argument(
         "--mtp",
