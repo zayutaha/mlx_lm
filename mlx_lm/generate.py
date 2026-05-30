@@ -346,7 +346,7 @@ def generate_step(
     logits_processors: Optional[List[Callable[[mx.array, mx.array], mx.array]]] = None,
     max_kv_size: Optional[int] = None,
     prompt_cache: Optional[Any] = None,
-    prefill_step_size: int = 2048,
+    prefill_step_size: int = 256,
     kv_bits: Optional[int] = None,
     kv_group_size: int = 64,
     quantized_kv_start: int = 0,
@@ -534,7 +534,7 @@ def speculative_generate_step(
     sampler: Optional[Callable[[mx.array], mx.array]] = None,
     logits_processors: Optional[List[Callable[[mx.array, mx.array], mx.array]]] = None,
     prompt_cache: Optional[Any] = None,
-    prefill_step_size: int = 512,
+    prefill_step_size: int = 256,
     kv_bits: Optional[int] = None,
     kv_group_size: int = 64,
     quantized_kv_start: int = 0,
@@ -720,7 +720,7 @@ def mtp_generate_step(
     sampler: Optional[Callable[[mx.array], mx.array]] = None,
     logits_processors: Optional[List[Callable[[mx.array, mx.array], mx.array]]] = None,
     prompt_cache: Optional[Any] = None,
-    prefill_step_size: int = 2048,
+    prefill_step_size: int = 256,
     kv_bits: Optional[int] = None,
     kv_group_size: int = 64,
     quantized_kv_start: int = 0,
@@ -1321,7 +1321,7 @@ class PromptProcessingBatch:
         uids: List[int],
         caches: List[List[Any]],
         tokens: Optional[List[List[int]]] = None,
-        prefill_step_size: int = 2048,
+        prefill_step_size: int = 256,
         samplers: Optional[List[Callable[[mx.array], mx.array]]] = None,
         fallback_sampler: Optional[Callable[[mx.array], mx.array]] = None,
         logits_processors: Optional[
@@ -1509,7 +1509,7 @@ class PromptProcessingBatch:
         cls,
         model: nn.Module,
         fallback_sampler: Callable[[mx.array], mx.array],
-        prefill_step_size: int = 2048,
+        prefill_step_size: int = 256,
     ):
         return cls(
             model=model,
@@ -1805,7 +1805,7 @@ class BatchGenerator:
         ] = None,
         completion_batch_size: int = 32,
         prefill_batch_size: int = 8,
-        prefill_step_size: int = 2048,
+        prefill_step_size: int = 256,
         max_kv_size: Optional[int] = None,
         stream=None,
     ):
