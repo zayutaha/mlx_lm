@@ -39,9 +39,8 @@ def make_prompt_cache(
         default_cache = model.make_cache()
         if turbo_kv_bits is not None:
             from .turboquant_cache import TurboQuantKVCache
-            # Apply TurboQuant only to KVCache layers, keep others as-is
             for i, c in enumerate(default_cache):
-                if isinstance(c, KVCache):
+                if isinstance(c, (KVCache, RotatingKVCache)):
                     default_cache[i] = TurboQuantKVCache(bits=turbo_kv_bits)
             return default_cache
         else:
