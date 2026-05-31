@@ -69,6 +69,11 @@ class MLXSubprocessAdapter:
     async def send_message(self, text: str) -> AsyncIterator[str]:
         self._interrupted = False
         text = " ".join(text.split("\n"))
+
+        # Drain any stale stdout data left from a previous interrupted read
+        # so we don't confuse old marker chunks with the new response.
+        await self._drain_stale_stdout()
+
         if not await self._runner.send(text):
             return
 
@@ -100,6 +105,24 @@ class MLXSubprocessAdapter:
             remaining = await self._read_until_prompt(timeout=10)
             if remaining:
                 yield remaining
+
+    async def _drain_stale_stdout(self):
+        """Read and discard any data already in stdout up to the prompt marker.
+        Uses a short timeout so we don't block if nothing is queued.
+        """
+        marker = self.TUI_PROMPT_MARKER
+        try:
+            while True:
+                chunk = await asyncio.wait_for(
+                    self._runner.proc.stdout.read(256), timeout=0.01
+                )
+                if not chunk:
+                    break
+                decoded = chunk.decode(errors="ignore")
+                if marker in decoded:
+                    break  # consumed up to prompt marker, stop draining
+        except asyncio.TimeoutError:
+            pass  # nothing stale to drain
 
     async def send_command(self, text: str, timeout: int = 60) -> str | None:
         await self._runner.send(text)
