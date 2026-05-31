@@ -612,7 +612,7 @@ class RotatingKVCache(_BaseCache):
     def trim(self, n):
         n = min(self.offset, n)
         self.offset -= n
-        self._idx -= n
+        self._idx = max(0, self._idx - n)
         return n
 
     def to_quantized(self, group_size: int = 64, bits: int = 4) -> QuantizedKVCache:
@@ -1400,7 +1400,7 @@ class BatchRotatingKVCache(_BaseCache):
     def trim(self, n):
         n = min(self._offset, n)
         self._offset -= n
-        self._idx -= n
+        self._idx = max(0, self._idx - n)
         self.offset -= n
         return n
 
