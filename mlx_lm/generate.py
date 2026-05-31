@@ -255,7 +255,7 @@ def setup_arg_parser():
 
 
 # A stream on the default device just for generation
-generation_stream = mx.new_thread_local_stream(mx.default_device())
+generation_stream = mx.new_stream(mx.default_device())
 
 
 @contextlib.contextmanager
@@ -995,10 +995,22 @@ def stream_generate(
             prompt, model, draft_model, **kwargs
         )
     elif mtp and hasattr(model, "mtp_forward"):
-        kwargs.pop("max_kv_size", None)
-        kwargs.pop("prompt_progress_callback", None)
-        kwargs.pop("num_draft_tokens", None)
-        token_generator = mtp_generate_step(prompt, model, **kwargs)
+        # Disable MTP when total context (cache + prompt + generation)
+        # exceeds 16k — MTP's memory overhead isn't worth it at long contexts.
+        _cache_offset = 0
+        _pc = kwargs.get("prompt_cache")
+        if _pc is not None:
+            for _c in _pc:
+                if hasattr(_c, "offset"):
+                    _cache_offset = _c.offset
+                    break
+        if _cache_offset + len(prompt) + max_tokens > 16384:
+            mtp = False
+        else:
+            kwargs.pop("max_kv_size", None)
+            kwargs.pop("prompt_progress_callback", None)
+            kwargs.pop("num_draft_tokens", None)
+            token_generator = mtp_generate_step(prompt, model, **kwargs)
     else:
         if mtp:
             warnings.warn(
