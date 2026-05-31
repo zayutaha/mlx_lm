@@ -988,6 +988,8 @@ def stream_generate(
 
     kwargs["max_tokens"] = max_tokens
 
+    token_generator = None
+
     if draft_model is not None:
         kwargs.pop("max_kv_size", None)
         kwargs.pop("prompt_progress_callback", None)
@@ -995,8 +997,9 @@ def stream_generate(
             prompt, model, draft_model, **kwargs
         )
     elif mtp and hasattr(model, "mtp_forward"):
-        # Disable MTP when total context (cache + prompt + generation)
-        # exceeds 16k — MTP's memory overhead isn't worth it at long contexts.
+        # Disable MTP when the existing cache (prior turns) already exceeds
+        # 16k tokens — beyond that MTP's marginal benefit drops and the extra
+        # memory overhead isn't worth it.
         _cache_offset = 0
         _pc = kwargs.get("prompt_cache")
         if _pc is not None:
@@ -1004,18 +1007,18 @@ def stream_generate(
                 if hasattr(_c, "offset"):
                     _cache_offset = _c.offset
                     break
-        if _cache_offset + len(prompt) + max_tokens > 16384:
-            mtp = False
-        else:
+        if not (_cache_offset > 16384):
             kwargs.pop("max_kv_size", None)
             kwargs.pop("prompt_progress_callback", None)
             kwargs.pop("num_draft_tokens", None)
             token_generator = mtp_generate_step(prompt, model, **kwargs)
-    else:
+
+    if token_generator is None:
         if mtp:
+            # MTP was requested but the model either doesn't have an MTP head
+            # or the context exceeds 16k (where MTP overhead outweighs benefit).
             warnings.warn(
-                "--mtp flag ignored: model does not have an MTP head. "
-                "Falling back to standard generation.",
+                "--mtp flag ignored: falling back to standard generation.",
                 stacklevel=2,
             )
         kwargs.pop("num_draft_tokens", None)
