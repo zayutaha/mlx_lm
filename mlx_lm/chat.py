@@ -874,26 +874,7 @@ Read the material and then ask me what I'd like to know about {topic}."""})
 
         prompt = None
         if stop_generation:
-
-            tokens_added = _cache_offset(prompt_cache) - offset_before
-            if tokens_added > 0:
-                if offset_before > 0:
-                    trim_prompt_cache(prompt_cache, tokens_added)
-                    rprint(
-                        f"[INFO] Trimmed {tokens_added} tokens from cache."
-                    )
-                else:
-                    # First turn: reset entire cache so next turn re-encodes
-                    # the full conversation from message_history
-                    prompt_cache = make_prompt_cache(
-                        model,
-                        args.max_kv_size,
-                        turbo_kv_bits=args.turbo_kv_bits,
-                        turbo_fp16_layers=args.turbo_fp16_layers,
-                    )
-                    _cache_stale = True
-                    rprint("[INFO] Cache reset for next conversation.")
-            rprint("[INFO] Press Ctrl-d again to exit or enter a new message.")
+            rprint("[INFO] Generation stopped. Ready for next message.")
 
 
 if __name__ == "__main__":
