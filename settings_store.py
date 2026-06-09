@@ -33,7 +33,9 @@ OPTIONS_STATE_PATH = Path.home() / ".omlx" / "chat_options.json"
 
 MODEL_CONFIGS_PATH = Path.home() / ".omlx" / "model_configs.json"
 
-PERSONALITY_CHOICES = ["default", "doctor", "historian"]
+from textual_ui.personas import PERSONALITIES
+
+PERSONALITY_CHOICES = list(PERSONALITIES.keys())
 
 OPTION_SPECS = [
     {
