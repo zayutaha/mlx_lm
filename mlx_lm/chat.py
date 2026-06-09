@@ -874,6 +874,10 @@ Read the material and then ask me what I'd like to know about {topic}."""})
 
         prompt = None
         if stop_generation:
+            # Force the next turn to re-evaluate the full history. 
+            # If we don't, the next turn will try to append to a cache 
+            # that is out of sync with the last message (which was discarded).
+            _cache_stale = True
             rprint("[INFO] Generation stopped. Ready for next message.")
 
 
