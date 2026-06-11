@@ -4,7 +4,6 @@ import argparse
 import gc
 import json
 import signal
-import sys
 from typing import Generator, List, Optional, Union
 
 import mlx.core as mx
@@ -13,7 +12,7 @@ if __name__ == "__main__" and __package__ is None:
     __package__ = "mlx_lm"
 
 from .generate import GenerationResponse, stream_generate
-from mlx_lm.models.cache import make_prompt_cache, trim_prompt_cache
+from mlx_lm.models.cache import make_prompt_cache
 from .sample_utils import make_sampler
 from .utils import load, sharded_load
 
@@ -47,11 +46,7 @@ When writing mathematical expressions or scientific notation, use standard LaTeX
 - Use \\text{...} for text inside math: $\\text{if } x > 0$
 """
 
-PERSONALITIES: dict[str, str] = {
-    "default": """Answer in as few words as needed. No preamble, no disclaimers, no filler. If unsure, say "I don't know" and stop. Be direct. Swear if it fits. Never mention being an AI.""",
-    "doctor": """Explain medical stuff like you're a paramedic in a bar. Direct, practical, no bullshit. Ask what matters, tell them what to watch for, and say when they need to see a real doctor. No AI talk. No padding. Swear if the situation warrants it.""",
-    "historian": """Tell history like you're recounting it to a friend over drinks. Focus on the people, the decisions, the luck, and the fuck-ups. Big themes, not just dates. Analogies to now are fine if they land. No "objectively speaking" or "it's complicated" cop-outs.""",
-}
+from textual_ui.personas import PERSONALITIES
 
 
 def chat(
@@ -357,7 +352,7 @@ def setup_arg_parser():
     parser.add_argument(
         "--prefill-step-size",
         type=int,
-        default=256,
+        default=128,
         help="Step size for prompt prefill processing. "
         "Larger values process more tokens per forward pass "
         "but use more memory. Default: 256.",
@@ -789,6 +784,9 @@ Read the material and then ask me what I'd like to know about {topic}."""})
         stop_generation = False
         response_text = ""
 
+        # Explicitly clear any stale interrupt flag before starting generation
+        _interrupted[0] = False
+
         def _cache_offset(cache):
             for c in cache:
                 if hasattr(c, "offset"):
@@ -827,13 +825,19 @@ Read the material and then ask me what I'd like to know about {topic}."""})
                 rprint("\n[INFO] Generation stopped by user.")
                 stop_generation = True
                 break
+        
+        # Always append whatever text was generated to history, 
+        # even if interrupted, to keep history and cache in sync.
+        if response_text:
+            message_history.append({"role": "assistant", "content": response_text})
+
         if not stop_generation:
             rprint()
         if last_response and not stop_generation:
-            message_history.append({"role": "assistant", "content": response_text})
+            # message_history already appended above
             
             # Log research output to file
-            if message_history and message_history[-2].get("content", "").startswith("Research:"):
+            if message_history and len(message_history) >= 2 and message_history[-2].get("content", "").startswith("Research:"):
                 import datetime as _dt
                 _rpath = f"/tmp/mlx_research_output_{_dt.datetime.now():%Y%m%d_%H%M%S}.log"
                 try:
@@ -873,26 +877,7 @@ Read the material and then ask me what I'd like to know about {topic}."""})
 
         prompt = None
         if stop_generation:
-
-            tokens_added = _cache_offset(prompt_cache) - offset_before
-            if tokens_added > 0:
-                if offset_before > 0:
-                    trim_prompt_cache(prompt_cache, tokens_added)
-                    rprint(
-                        f"[INFO] Trimmed {tokens_added} tokens from cache."
-                    )
-                else:
-                    # First turn: reset entire cache so next turn re-encodes
-                    # the full conversation from message_history
-                    prompt_cache = make_prompt_cache(
-                        model,
-                        args.max_kv_size,
-                        turbo_kv_bits=args.turbo_kv_bits,
-                        turbo_fp16_layers=args.turbo_fp16_layers,
-                    )
-                    _cache_stale = True
-                    rprint("[INFO] Cache reset for next conversation.")
-            rprint("[INFO] Press Ctrl-d again to exit or enter a new message.")
+            rprint("[INFO] Generation stopped. Ready for next message.")
 
 
 if __name__ == "__main__":

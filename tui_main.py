@@ -86,7 +86,7 @@ HELP_TEXT = """\
 
 [dim]Press [bold]Ctrl+\\[/] or Esc or click outside to close[/]"""
 from textual_ui.latex import format_for_display, strip_prompt_markers
-from textual_ui.personas import PERSONALITIES
+from textual_ui.personas import PERSONALITY_INFO
 
 from textual_ui.widgets.chat_input import ChatInput
 from textual_ui.widgets.loading_spinner import LoadingSpinner
@@ -130,9 +130,8 @@ class ChatUI(App):
         with Center(id="personality-selector-container"):
             yield PersonalitySelector(
                 [
-                    ("default", "Blunt, compact answers with no fake politeness."),
-                    ("doctor", "Medical explainer who asks follow-up questions first."),
-                    ("historian", "Opinionated historical analysis with sharper language."),
+                    (name, info["description"])
+                    for name, info in PERSONALITY_INFO.items()
                 ],
                 id="personality-selector",
             )
