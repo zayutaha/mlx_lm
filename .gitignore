@@ -141,3 +141,4 @@ dmypy.json
 bench*
 mlx-vlm/
 opencode/
+uv.lock
